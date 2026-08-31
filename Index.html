@@ -225,7 +225,7 @@
   </div>
 </div>
 
-<input type="text" id="btScannerInput" autocomplete="off" inputmode="none" style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
+<input type="text" id="btScannerInput" autocomplete="off" inputmode="none" readonly style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
 
 <div class="app-header">
   <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
@@ -444,13 +444,25 @@ function runQueue() {
 
 function wireBluetoothScanner() {
   const btInput = document.getElementById('btScannerInput');
+  let barcodeBuffer = '';
+  let lastKeyTime = Date.now();
 
-  btInput.addEventListener('keydown', function (e) {
+  window.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT' && e.target !== btInput) return;
+
+    const currentTime = Date.now();
+    if (currentTime - lastKeyTime > 100) {
+      barcodeBuffer = '';
+    }
+    lastKeyTime = currentTime;
+
     if (e.key === 'Enter') {
-      e.preventDefault();
-      const val = btInput.value.trim();
-      btInput.value = '';
-      if (val.length > 0) processScan(val);
+      if (barcodeBuffer.length > 0) {
+        processScan(barcodeBuffer);
+        barcodeBuffer = '';
+      }
+    } else if (e.key.length === 1) {
+      barcodeBuffer += e.key;
     }
   });
 }
@@ -485,12 +497,12 @@ function renderList() {
         '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
         '<td>' +
           '<span class="qty-adjust">' +
-            '<button type="button" tabindex="-1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
+            '<button type="button" tabindex="-1" onpointerdown="event.preventDefault()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
             '<span class="fw-semibold mx-2" style="user-select:none;">' + escapeHtml(String(entry.countedQty)) + '</span>' +
-            '<button type="button" tabindex="-1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
+            '<button type="button" tabindex="-1" onpointerdown="event.preventDefault()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
           '</span>' +
         '</td>' +
-        '<td><button type="button" tabindex="-1" class="remove-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="removeItem(' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
+        '<td><button type="button" tabindex="-1" class="remove-btn" onpointerdown="event.preventDefault()" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="removeItem(' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
       '</tr>'
     );
   }).join('');
