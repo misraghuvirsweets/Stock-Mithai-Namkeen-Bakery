@@ -24,6 +24,7 @@
     color:var(--ink);
     font-family:'Segoe UI', Roboto, Arial, sans-serif;
     padding-bottom:90px;
+    touch-action: manipulation;
   }
 
   .app-header{
@@ -104,12 +105,6 @@
   .scan-banner.ok{ background:rgba(31,160,74,.9); }
   .scan-banner.err{ background:rgba(220,53,69,.9); }
 
-  .manual-entry-wrap{
-    max-width:340px;
-    margin:.5rem auto 0;
-    padding:0 .75rem;
-  }
-
   .list-wrap{
     max-width:900px;
     margin:.9rem auto 0;
@@ -154,15 +149,40 @@
     vertical-align:middle;
     padding:.65rem .9rem;
   }
-  .qty-adjust{ display:inline-flex; align-items:center; gap:.35rem; }
+  .qty-adjust{ 
+    display:inline-flex; 
+    align-items:center; 
+    gap:.35rem; 
+    user-select: none;
+    -webkit-user-select: none;
+  }
   .qty-adjust button{
-    width:24px; height:24px; line-height:1;
+    width:36px; height:36px; line-height:1;
     border:1px solid var(--brand-orange);
     background:var(--brand-orange-light);
     color:var(--brand-crimson-dark);
-    border-radius:6px; font-size:.72rem;
+    border-radius:6px; font-size:1rem;
+    display:inline-flex; align-items:center; justify-content:center;
+    user-select:none;
+    -webkit-user-select:none;
+    touch-action: manipulation;
+    outline: none;
   }
-  .remove-btn{ border:none; background:none; color:#dc3545; font-size:.95rem; }
+  .qty-adjust button:active{
+    background:var(--brand-orange);
+    color:#fff;
+  }
+  .remove-btn{ 
+    border:none; 
+    background:none; 
+    color:#dc3545; 
+    font-size:1.1rem; 
+    padding:.4rem .6rem; 
+    user-select:none;
+    -webkit-user-select:none;
+    touch-action: manipulation;
+    outline: none;
+  }
   .empty-list{ text-align:center; color:#a99184; padding:1.6rem; font-size:.85rem; }
 
   .bottom-bar{
@@ -205,7 +225,7 @@
   </div>
 </div>
 
-<input type="text" id="btScannerInput" autocomplete="off" style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
+<input type="text" id="btScannerInput" autocomplete="off" inputmode="none" style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
 
 <div class="app-header">
   <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
@@ -217,13 +237,6 @@
   <div class="camera-box">
     <div id="qrReader"></div>
     <div class="scan-banner" id="scanBanner">Starting camera...</div>
-  </div>
-</div>
-
-<div class="manual-entry-wrap">
-  <div class="input-group input-group-sm">
-    <input type="text" id="manualCodeInput" class="form-control" placeholder="Manual Barcode Entry...">
-    <button class="btn btn-outline-secondary" type="button" onclick="submitManualCode()"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
   </div>
 </div>
 
@@ -253,7 +266,7 @@
 
 <div class="bottom-bar">
   <div class="bottom-bar-inner">
-    <button class="btn-final-submit w-100" id="finalSubmitBtn" type="button" disabled>
+    <button class="btn-final-submit w-100" id="finalSubmitBtn" type="button" disabled tabindex="-1">
       <i class="fa-solid fa-check-double"></i> Submit Scanned Items
     </button>
   </div>
@@ -299,19 +312,13 @@ document.addEventListener('DOMContentLoaded', function () {
   } else {
     showBranchPicker();
   }
-
-  document.getElementById('manualCodeInput').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-      submitManualCode();
-    }
-  });
 });
 
 function showBranchPicker() {
   const overlay = document.getElementById('branchPickerOverlay');
   const list = document.getElementById('branchChoiceList');
   list.innerHTML = BRANCH_OPTIONS.map(function (b) {
-    return '<button type="button" class="branch-choice-btn" onclick="chooseBranch(\'' + b.id + '\')">' +
+    return '<button type="button" tabindex="-1" class="branch-choice-btn" onclick="chooseBranch(\'' + b.id + '\')">' +
              '<i class="fa-solid fa-store"></i> ' + escapeHtml(b.label) +
            '</button>';
   }).join('');
@@ -372,15 +379,6 @@ function startCamera() {
   }).catch(function (err) {
     setBanner('Camera error: ' + err, 'err');
   });
-}
-
-function submitManualCode() {
-  const input = document.getElementById('manualCodeInput');
-  const val = input.value.trim();
-  if (val) {
-    processScan(val);
-    input.value = '';
-  }
 }
 
 function processScan(decodedText) {
@@ -444,13 +442,6 @@ function runQueue() {
     });
 }
 
-function focusBtInput() {
-  const el = document.getElementById('btScannerInput');
-  if (el && document.activeElement !== document.getElementById('manualCodeInput')) {
-    el.focus();
-  }
-}
-
 function wireBluetoothScanner() {
   const btInput = document.getElementById('btScannerInput');
 
@@ -462,12 +453,6 @@ function wireBluetoothScanner() {
       if (val.length > 0) processScan(val);
     }
   });
-
-  focusBtInput();
-  document.addEventListener('click', function () {
-    setTimeout(focusBtInput, 50);
-  });
-  window.addEventListener('focus', focusBtInput);
 }
 
 function setBanner(text, cls) {
@@ -500,12 +485,12 @@ function renderList() {
         '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
         '<td>' +
           '<span class="qty-adjust">' +
-            '<button type="button" onclick="adjustQty(' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
-            '<span class="fw-semibold">' + escapeHtml(String(entry.countedQty)) + '</span>' +
-            '<button type="button" onclick="adjustQty(' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
+            '<button type="button" tabindex="-1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
+            '<span class="fw-semibold mx-2" style="user-select:none;">' + escapeHtml(String(entry.countedQty)) + '</span>' +
+            '<button type="button" tabindex="-1" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="adjustQty(' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
           '</span>' +
         '</td>' +
-        '<td><button class="remove-btn" onclick="removeItem(' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
+        '<td><button type="button" tabindex="-1" class="remove-btn" onmousedown="event.preventDefault()" ontouchstart="event.preventDefault()" onclick="removeItem(' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
       '</tr>'
     );
   }).join('');
