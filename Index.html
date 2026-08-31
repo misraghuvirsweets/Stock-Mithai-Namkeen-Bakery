@@ -23,10 +23,9 @@
     background:var(--bg-soft);
     color:var(--ink);
     font-family:'Segoe UI', Roboto, Arial, sans-serif;
-    padding-bottom:90px; /* room for fixed bottom bar */
+    padding-bottom:90px;
   }
 
-  /* ---------- HEADER ---------- */
   .app-header{
     background:linear-gradient(90deg, var(--brand-crimson) 0%, var(--brand-crimson-dark) 100%);
     color:#fff;
@@ -52,7 +51,6 @@
     padding:.5rem 1rem; font-size:.8rem; text-align:center; display:none;
   }
 
-  /* ---------- BRANCH PICKER (shown only if no ?branch= in URL) ---------- */
   .branch-picker-overlay{
     position:fixed; inset:0; z-index:2000;
     background:rgba(43,35,32,.55);
@@ -79,7 +77,6 @@
   }
   .branch-choice-btn:hover{ background:#ffe6c2; }
 
-  /* ---------- CAMERA ---------- */
   .camera-wrap{
     max-width:340px;
     margin:0.75rem auto 0;
@@ -107,7 +104,12 @@
   .scan-banner.ok{ background:rgba(31,160,74,.9); }
   .scan-banner.err{ background:rgba(220,53,69,.9); }
 
-  /* ---------- SCANNED LIST ---------- */
+  .manual-entry-wrap{
+    max-width:340px;
+    margin:.5rem auto 0;
+    padding:0 .75rem;
+  }
+
   .list-wrap{
     max-width:900px;
     margin:.9rem auto 0;
@@ -163,7 +165,6 @@
   .remove-btn{ border:none; background:none; color:#dc3545; font-size:.95rem; }
   .empty-list{ text-align:center; color:#a99184; padding:1.6rem; font-size:.85rem; }
 
-  /* ---------- BOTTOM BAR (Final Submit) ---------- */
   .bottom-bar{
     position:fixed;
     left:0; right:0; bottom:0;
@@ -194,10 +195,9 @@
 
 <div class="config-banner" id="configBanner">
   <i class="fa-solid fa-triangle-exclamation"></i>
-  APPS_SCRIPT_URL is not set — open this file and paste your deployed Apps Script /exec URL near the top of the &lt;script&gt; section.
+  APPS_SCRIPT_URL is not configured properly.
 </div>
 
-<!-- ===================== BRANCH PICKER (only if no ?branch= given) ===================== -->
 <div class="branch-picker-overlay" id="branchPickerOverlay" style="display:none;">
   <div class="branch-picker-card">
     <h5><i class="fa-solid fa-store"></i> Select Your Branch</h5>
@@ -205,20 +205,14 @@
   </div>
 </div>
 
-<!-- Hidden input that stays focused to receive Bluetooth barcode scanner
-     input (Bluetooth scanners act like a keyboard: they type the code then
-     press Enter automatically). Invisible, but functionally always ready. -->
 <input type="text" id="btScannerInput" autocomplete="off" style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
 
-<!-- ===================== HEADER ===================== -->
 <div class="app-header">
   <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
   <span class="brand-name">Raghuvir Stock Scan</span>
   <span class="branch-pill" id="branchPill"><i class="fa-solid fa-store"></i> --</span>
-  <span class="branch-pill" style="margin-left:.35rem; background:rgba(255,255,255,.1);"><i class="fa-brands fa-bluetooth-b"></i> Ready</span>
 </div>
 
-<!-- ===================== CAMERA (always live) ===================== -->
 <div class="camera-wrap">
   <div class="camera-box">
     <div id="qrReader"></div>
@@ -226,7 +220,13 @@
   </div>
 </div>
 
-<!-- ===================== SCANNED ITEMS LIST ===================== -->
+<div class="manual-entry-wrap">
+  <div class="input-group input-group-sm">
+    <input type="text" id="manualCodeInput" class="form-control" placeholder="Manual Barcode Entry...">
+    <button class="btn btn-outline-secondary" type="button" onclick="submitManualCode()"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+  </div>
+</div>
+
 <div class="list-wrap">
   <div class="list-card">
     <div class="list-header">
@@ -251,7 +251,6 @@
   </div>
 </div>
 
-<!-- ===================== BOTTOM BAR: Final Submit ===================== -->
 <div class="bottom-bar">
   <div class="bottom-bar-inner">
     <button class="btn-final-submit w-100" id="finalSubmitBtn" type="button" disabled>
@@ -260,7 +259,6 @@
   </div>
 </div>
 
-<!-- Audio feedback -->
 <audio id="beepSuccess" preload="auto">
   <source src="https://actions.google.com/sounds/v1/cartoon/pop.ogg" type="audio/ogg">
 </audio>
@@ -269,24 +267,8 @@
 </audio>
 
 <script>
-/* ============================================================================
-   ⚠️ REQUIRED CONFIG — paste your deployed Apps Script Web App URL here.
-============================================================================ */
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBS7ITZkbwM6CWT4V2M_Jgsa5xHXLdON_uhRN5aNec205N-7-37rYmthq3KkbtlSy3uA/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyo-vJOoWzfd7PPKIaOCdqDn3W3GUYXQsFjESVl3Iqnh4uuOXF6j903cTwj2nmdlpkP_g/exec';
 
-/* ============================================================================
-   BRANCH CONTEXT
-   ------------------------------------------------------------------------
-   Preferred: give each branch its own link, e.g.
-     index.html?branch=RAMMANDIR
-     index.html?branch=VISHRAMBAGH
-   These KEYS must exactly match the keys in the BRANCHES object in
-   Code.gs. If no ?branch= is present (or it's not recognized), a picker
-   screen is shown so the operator can choose (useful if you hand out one
-   shared link/QR code to everyone instead of two separate links).
-============================================================================ */
-// Keep this list in sync with BRANCHES in Code.gs (id + label only — the
-// sheet names live server-side and are never needed by the frontend).
 const BRANCH_OPTIONS = [
   { id: 'RAMMANDIR',   label: 'Ram Mandir' },
   { id: 'VISHRAMBAGH', label: 'Vishrambagh' }
@@ -296,21 +278,15 @@ const urlParams = new URLSearchParams(window.location.search);
 let BRANCH_ID = (urlParams.get('branch') || '').toUpperCase();
 let BRANCH_LABEL = '';
 
-/* ============================================================================
-   STATE
-============================================================================ */
-let scannedItems = [];        // { barcodeCode, itemName, alternateUnit, countedQty }
+let scannedItems = [];
 let html5QrCode = null;
 let cameraStarted = false;
 let lastCode = '';
 let lastCodeTime = 0;
-const SCAN_COOLDOWN_MS = 600; // faster repeat-scan of the same item, still avoids duplicate frame triggers
-let scanQueue = [];           // holds barcodes waiting to be looked up, in arrival order
-let queueRunning = false;     // true while the queue worker is processing
+const SCAN_COOLDOWN_MS = 600;
+let scanQueue = [];
+let queueRunning = false;
 
-/* ============================================================================
-   INIT
-============================================================================ */
 document.addEventListener('DOMContentLoaded', function () {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
     document.getElementById('configBanner').style.display = 'block';
@@ -319,12 +295,16 @@ document.addEventListener('DOMContentLoaded', function () {
   const knownIds = BRANCH_OPTIONS.map(function (b) { return b.id; });
 
   if (BRANCH_ID && knownIds.indexOf(BRANCH_ID) !== -1) {
-    // Branch already known from the URL — go straight in.
     beginForBranch(BRANCH_ID);
   } else {
-    // No (valid) ?branch= in the URL — show the picker.
     showBranchPicker();
   }
+
+  document.getElementById('manualCodeInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      submitManualCode();
+    }
+  });
 });
 
 function showBranchPicker() {
@@ -339,8 +319,6 @@ function showBranchPicker() {
 }
 
 function chooseBranch(id) {
-  // Reflect the choice in the URL (without reloading) so a refresh/bookmark
-  // remembers the branch, then start the app for it.
   const url = new URL(window.location.href);
   url.searchParams.set('branch', id);
   window.history.replaceState({}, '', url);
@@ -364,9 +342,6 @@ function beginForBranch(id) {
   }
 }
 
-/* ============================================================================
-   CAMERA — starts automatically, stays live, scans continuously
-============================================================================ */
 function startCamera() {
   html5QrCode = new Html5Qrcode('qrReader');
 
@@ -374,7 +349,7 @@ function startCamera() {
     fps: 20,
     qrbox: { width: 250, height: 140 },
     experimentalFeatures: {
-      useBarCodeDetectorIfSupported: true // uses the browser's native, much faster decoder when available
+      useBarCodeDetectorIfSupported: true
     },
     formatsToSupport: [
       Html5QrcodeSupportedFormats.EAN_13,
@@ -391,7 +366,7 @@ function startCamera() {
     { facingMode: 'environment' },
     config,
     processScan,
-    function onFail() { /* silent — fires continuously while nothing is in frame */ }
+    function onFail() {}
   ).then(function () {
     setBanner('Point camera at a barcode...', '');
   }).catch(function (err) {
@@ -399,32 +374,33 @@ function startCamera() {
   });
 }
 
-/**
- * Called by both the camera decoder and the Bluetooth scanner input.
- * Instead of firing an API call immediately (which could overlap with a
- * previous still-in-flight lookup and risk applying results out of order),
- * every scan is pushed onto a queue and processed one at a time, strictly
- * in the order they were scanned. This is what guarantees fast scanning
- * never drops a barcode or mixes up which result belongs to which item.
- */
+function submitManualCode() {
+  const input = document.getElementById('manualCodeInput');
+  const val = input.value.trim();
+  if (val) {
+    processScan(val);
+    input.value = '';
+  }
+}
+
 function processScan(decodedText) {
-  if (!BRANCH_ID) return; // ignore scans until a branch is selected
+  if (!BRANCH_ID) return;
+
+  const rawCode = String(decodedText || '').trim();
+  if (!rawCode) return;
 
   const now = Date.now();
-  // Only dedupes REPEATS of the exact same code within the cooldown window
-  // (the camera "sees" the same barcode across many frames); different
-  // codes scanned back-to-back are never blocked by this.
-  if (decodedText === lastCode && (now - lastCodeTime) < SCAN_COOLDOWN_MS) return;
-  lastCode = decodedText;
+  if (rawCode === lastCode && (now - lastCodeTime) < SCAN_COOLDOWN_MS) return;
+  lastCode = rawCode;
   lastCodeTime = now;
 
-  scanQueue.push(decodedText);
-  setBanner('Queued: ' + decodedText + (scanQueue.length > 1 ? '  (' + scanQueue.length + ' waiting)' : ''), '');
+  scanQueue.push(rawCode);
+  setBanner('Queued: ' + rawCode + (scanQueue.length > 1 ? ' (' + scanQueue.length + ' waiting)' : ''), '');
   runQueue();
 }
 
 function runQueue() {
-  if (queueRunning) return;      // already draining the queue
+  if (queueRunning) return;
   if (scanQueue.length === 0) return;
 
   queueRunning = true;
@@ -440,9 +416,9 @@ function runQueue() {
       }
 
       const item = result.item;
-      const displayName = item.productName;
+      const displayName = item.printName || item.productName;
 
-      const existing = scannedItems.find(function (e) { return e.barcodeCode === item.userDefinedCode; });
+      const existing = scannedItems.find(function (e) { return e.barcodeCode.toLowerCase() === item.userDefinedCode.toLowerCase(); });
       if (existing) {
         existing.countedQty += 1;
       } else {
@@ -464,20 +440,15 @@ function runQueue() {
     })
     .finally(function () {
       queueRunning = false;
-      if (scanQueue.length > 0) runQueue(); // immediately process the next queued scan
+      if (scanQueue.length > 0) runQueue();
     });
 }
 
-/* ============================================================================
-   BLUETOOTH BARCODE SCANNER SUPPORT
-   Bluetooth scanners behave like a keyboard: they "type" the barcode into
-   whatever input is focused, then send an Enter keypress automatically.
-   This hidden input stays focused at all times so a Bluetooth scanner
-   works alongside the camera without any extra setup.
-============================================================================ */
 function focusBtInput() {
   const el = document.getElementById('btScannerInput');
-  if (el) el.focus();
+  if (el && document.activeElement !== document.getElementById('manualCodeInput')) {
+    el.focus();
+  }
 }
 
 function wireBluetoothScanner() {
@@ -492,7 +463,6 @@ function wireBluetoothScanner() {
     }
   });
 
-  // Keep it focused so scans are captured the instant they happen.
   focusBtInput();
   document.addEventListener('click', function () {
     setTimeout(focusBtInput, 50);
@@ -506,9 +476,6 @@ function setBanner(text, cls) {
   el.className = 'scan-banner' + (cls ? ' ' + cls : '');
 }
 
-/* ============================================================================
-   SCANNED ITEMS LIST
-============================================================================ */
 function renderList() {
   const body = document.getElementById('scanTableBody');
   const badge = document.getElementById('countBadge');
@@ -556,9 +523,6 @@ function removeItem(index) {
   renderList();
 }
 
-/* ============================================================================
-   FINAL SUBMIT
-============================================================================ */
 function finalSubmit() {
   if (scannedItems.length === 0) return;
 
@@ -597,9 +561,6 @@ function finalSubmit() {
     });
 }
 
-/* ============================================================================
-   API HELPERS
-============================================================================ */
 function apiGet(params) {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
     return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
@@ -629,9 +590,6 @@ function apiPost(bodyObj) {
     });
 }
 
-/* ============================================================================
-   UTILITIES
-============================================================================ */
 function playSound(id) {
   const audio = document.getElementById(id);
   if (audio) {
