@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raghuvir Sweets And Bakers | Stock Scan</title>
+
+<link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+
+<style>
+  :root{
+    --brand-crimson:#a5192a;
+    --brand-crimson-dark:#7d1220;
+    --brand-orange:#f5871f;
+    --brand-orange-light:#fff3e6;
+    --bg-soft:#faf7f5;
+    --ink:#2b2320;
+  }
+  * { box-sizing: border-box; }
+  body{
+    background:var(--bg-soft);
+    color:var(--ink);
+    font-family:'Segoe UI', Roboto, Arial, sans-serif;
+    padding-bottom:90px; /* room for fixed bottom bar */
+  }
+
+  /* ---------- HEADER ---------- */
+  .app-header{
+    background:linear-gradient(90deg, var(--brand-crimson) 0%, var(--brand-crimson-dark) 100%);
+    color:#fff;
+    padding:.6rem 1rem;
+    display:flex;
+    align-items:center;
+    gap:.5rem;
+    flex-wrap:wrap;
+  }
+  .app-header .brand-logo{
+    height:38px; width:38px; object-fit:contain; border-radius:8px; background:#fff; padding:2px;
+  }
+  .app-header .brand-name{ font-weight:700; font-size:1rem; line-height:1.1; }
+  .ctx-pill{
+    background:rgba(255,255,255,.18);
+    border:1px solid rgba(255,255,255,.35);
+    font-size:.75rem; font-weight:700;
+    padding:.25rem .65rem; border-radius:999px;
+    white-space:nowrap;
+  }
+  .ctx-pills{ margin-left:auto; display:flex; gap:.35rem; flex-wrap:wrap; }
+
+  .config-banner{
+    background:#fff3cd; border-bottom:1px solid #ffe69c; color:#664d03;
+    padding:.5rem 1rem; font-size:.8rem; text-align:center; display:none;
+  }
+
+  /* ---------- BRANCH / DEPARTMENT PICKER (shown if URL is missing them) ---------- */
+  .picker-overlay{
+    position:fixed; inset:0; z-index:2000;
+    background:rgba(43,35,32,.55);
+    display:flex; align-items:center; justify-content:center;
+    padding:1rem;
+  }
+  .picker-card{
+    background:#fff; border-radius:16px; padding:1.4rem 1.2rem;
+    max-width:360px; width:100%;
+    box-shadow:0 10px 30px rgba(0,0,0,.25);
+  }
+  .picker-card h5{
+    color:var(--brand-crimson-dark); font-weight:800; margin-bottom:.9rem; text-align:center;
+  }
+  .picker-card .picker-step-label{
+    font-size:.75rem; text-transform:uppercase; letter-spacing:.5px;
+    color:#a99184; font-weight:700; margin-bottom:.4rem;
+  }
+  .choice-btn{
+    display:block; width:100%; text-align:left;
+    background:var(--brand-orange-light);
+    border:1px solid #f0d3b8;
+    color:var(--brand-crimson-dark);
+    font-weight:700;
+    padding:.65rem .9rem;
+    border-radius:10px;
+    margin-bottom:.55rem;
+  }
+  .choice-btn:hover{ background:#ffe6c2; }
+  .picker-back{
+    background:none; border:none; color:#a99184; font-size:.8rem; margin-bottom:.6rem;
+  }
+
+  /* ---------- CAMERA ---------- */
+  .camera-wrap{
+    max-width:340px;
+    margin:0.75rem auto 0;
+    padding:0 .75rem;
+  }
+  .camera-box{
+    background:#000;
+    border-radius:14px;
+    overflow:hidden;
+    position:relative;
+    box-shadow:0 4px 16px rgba(165,25,42,.15);
+  }
+  #qrReader{ width:100%; }
+  #qrReader video{ border-radius:14px; display:block; }
+  .scan-banner{
+    position:absolute; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,.75);
+    color:#fff;
+    padding:.65rem .9rem;
+    font-size:.9rem;
+    font-weight:600;
+    text-align:center;
+    min-height:2.6rem;
+  }
+  .scan-banner.ok{ background:rgba(31,160,74,.9); }
+  .scan-banner.err{ background:rgba(220,53,69,.9); }
+
+  /* ---------- SCANNED LIST ---------- */
+  .list-wrap{
+    max-width:900px;
+    margin:.9rem auto 0;
+    padding:0 .75rem;
+  }
+  .list-card{
+    background:#fff;
+    border-radius:14px;
+    border:1px solid #eee0d8;
+    box-shadow:0 2px 10px rgba(165,25,42,.06);
+  }
+  .list-header{
+    padding:.7rem .9rem;
+    border-bottom:1px solid #f1e5dc;
+    font-weight:700;
+    font-size:.9rem;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .count-badge{
+    background:var(--brand-orange-light);
+    color:var(--brand-crimson-dark);
+    border:1px solid #f0d3b8;
+    font-weight:800;
+    font-size:.78rem;
+    padding:.2rem .6rem;
+    border-radius:999px;
+  }
+  .scan-table{ margin-bottom:0; width:100%; }
+  .scan-table thead th{
+    background:#f6ede6;
+    color:var(--brand-crimson-dark);
+    font-size:.75rem;
+    text-transform:uppercase;
+    letter-spacing:.4px;
+    border:none;
+    padding:.65rem .9rem;
+  }
+  .scan-table tbody td{
+    font-size:.95rem;
+    vertical-align:middle;
+    padding:.65rem .9rem;
+  }
+  .qty-adjust{ display:inline-flex; align-items:center; gap:.35rem; }
+  .qty-adjust button{
+    width:24px; height:24px; line-height:1;
+    border:1px solid var(--brand-orange);
+    background:var(--brand-orange-light);
+    color:var(--brand-crimson-dark);
+    border-radius:6px; font-size:.72rem;
+  }
+  .remove-btn{ border:none; background:none; color:#dc3545; font-size:.95rem; }
+  .empty-list{ text-align:center; color:#a99184; padding:1.6rem; font-size:.85rem; }
+
+  /* ---------- BOTTOM BAR (Final Submit) ---------- */
+  .bottom-bar{
+    position:fixed;
+    left:0; right:0; bottom:0;
+    background:#fff;
+    border-top:1px solid #eee0d8;
+    box-shadow:0 -2px 12px rgba(0,0,0,.08);
+    padding:.6rem .9rem;
+    z-index:1030;
+  }
+  .bottom-bar-inner{
+    max-width:900px;
+    margin:0 auto;
+  }
+  .btn-final-submit{
+    background:linear-gradient(90deg, var(--brand-crimson), var(--brand-crimson-dark));
+    border:none;
+    color:#fff;
+    font-weight:700;
+    font-size:.85rem;
+    padding:.55rem 1rem;
+    border-radius:8px;
+    white-space:nowrap;
+  }
+  .btn-final-submit:disabled{ opacity:.5; }
+</style>
+</head>
+<body>
+
+<div class="config-banner" id="configBanner">
+  <i class="fa-solid fa-triangle-exclamation"></i>
+  APPS_SCRIPT_URL is not set — open this file and paste your deployed Apps Script /exec URL near the top of the &lt;script&gt; section.
+</div>
+
+<!-- ===================== BRANCH / DEPARTMENT PICKER ===================== -->
+<div class="picker-overlay" id="pickerOverlay" style="display:none;">
+  <div class="picker-card">
+    <button type="button" class="picker-back" id="pickerBackBtn" style="display:none;" onclick="pickerGoBack()">
+      <i class="fa-solid fa-arrow-left"></i> Back
+    </button>
+    <div class="picker-step-label" id="pickerStepLabel">Step 1 of 2</div>
+    <h5 id="pickerTitle"><i class="fa-solid fa-store"></i> Select Your Branch</h5>
+    <div id="pickerChoiceList"></div>
+  </div>
+</div>
+
+<!-- Hidden input that stays focused to receive Bluetooth barcode scanner
+     input (Bluetooth scanners act like a keyboard: they type the code then
+     press Enter automatically). Invisible, but functionally always ready. -->
+<input type="text" id="btScannerInput" autocomplete="off" style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
+
+<!-- ===================== HEADER ===================== -->
+<div class="app-header">
+  <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
+  <span class="brand-name">Raghuvir Stock Scan</span>
+  <div class="ctx-pills">
+    <span class="ctx-pill" id="branchPill"><i class="fa-solid fa-store"></i> --</span>
+    <span class="ctx-pill" id="deptPill"><i class="fa-solid fa-building"></i> --</span>
+  </div>
+</div>
+
+<!-- ===================== CAMERA (always live) ===================== -->
+<div class="camera-wrap">
+  <div class="camera-box">
+    <div id="qrReader"></div>
+    <div class="scan-banner" id="scanBanner">Starting camera...</div>
+  </div>
+</div>
+
+<!-- ===================== SCANNED ITEMS LIST ===================== -->
+<div class="list-wrap">
+  <div class="list-card">
+    <div class="list-header">
+      <span><i class="fa-solid fa-list-ol"></i> Scanned Items</span>
+      <span class="count-badge" id="countBadge">0 items</span>
+    </div>
+    <div class="table-responsive">
+      <table class="table scan-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Unit</th>
+            <th>Qty</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="scanTableBody">
+          <tr><td colspan="4" class="empty-list">Point the camera at a barcode to start scanning...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== BOTTOM BAR: Final Submit ===================== -->
+<div class="bottom-bar">
+  <div class="bottom-bar-inner">
+    <button class="btn-final-submit w-100" id="finalSubmitBtn" type="button" disabled>
+      <i class="fa-solid fa-check-double"></i> Submit Scanned Items
+    </button>
+  </div>
+</div>
+
+<!-- Audio feedback -->
+<audio id="beepSuccess" preload="auto">
+  <source src="https://actions.google.com/sounds/v1/cartoon/pop.ogg" type="audio/ogg">
+</audio>
+<audio id="beepError" preload="auto">
+  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+</audio>
+
+<script>
+/* ============================================================================
+   ⚠️ REQUIRED CONFIG — paste your deployed Apps Script Web App URL here.
+============================================================================ */
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxBS7ITZkbwM6CWT4V2M_Jgsa5xHXLdON_uhRN5aNec205N-7-37rYmthq3KkbtlSy3uA/exec';
+
+/* ============================================================================
+   BRANCH + DEPARTMENT CONTEXT
+   ------------------------------------------------------------------------
+   Preferred: give each branch+department combo its own link, e.g.
+     index.html?branch=RAMMANDIR&dept=BAKERY
+     index.html?branch=VISHRAMBAGH&dept=SWEETS
+   These KEYS must exactly match the keys in BRANCHES / DEPARTMENTS in
+   Code.gs. If either is missing from the URL, a two-step picker is shown
+   (branch first, then department) so a single shared link/QR code still
+   works for everyone.
+============================================================================ */
+// Keep these lists in sync with Code.gs (id + label only — sheet names
+// live server-side and are never needed by the frontend).
+const BRANCH_OPTIONS = [
+  { id: 'RAMMANDIR',    label: 'Ram Mandir' },
+  { id: 'VISHRAMBAGH',  label: 'Vishrambagh' }
+];
+const DEPARTMENT_OPTIONS = [
+  { id: 'BAKERY',  label: 'Bakery' },
+  { id: 'SWEETS',  label: 'Sweets' },
+  { id: 'NAMKEEN', label: 'Namkeen' }
+];
+
+const urlParams = new URLSearchParams(window.location.search);
+let BRANCH_ID = (urlParams.get('branch') || '').toUpperCase();
+let DEPT_ID = (urlParams.get('dept') || '').toUpperCase();
+let BRANCH_LABEL = '';
+let DEPT_LABEL = '';
+
+/* ============================================================================
+   STATE
+============================================================================ */
+let scannedItems = [];        // { barcodeCode, itemName, alternateUnit, countedQty }
+let html5QrCode = null;
+let cameraStarted = false;
+let lastCode = '';
+let lastCodeTime = 0;
+const SCAN_COOLDOWN_MS = 600; // faster repeat-scan of the same item, still avoids duplicate frame triggers
+let scanQueue = [];           // holds barcodes waiting to be looked up, in arrival order
+let queueRunning = false;     // true while the queue worker is processing
+
+/* ============================================================================
+   INIT
+============================================================================ */
+document.addEventListener('DOMContentLoaded', function () {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
+    document.getElementById('configBanner').style.display = 'block';
+  }
+
+  const knownBranchIds = BRANCH_OPTIONS.map(function (b) { return b.id; });
+  const knownDeptIds = DEPARTMENT_OPTIONS.map(function (d) { return d.id; });
+
+  const branchOk = BRANCH_ID && knownBranchIds.indexOf(BRANCH_ID) !== -1;
+  const deptOk = DEPT_ID && knownDeptIds.indexOf(DEPT_ID) !== -1;
+
+  if (branchOk && deptOk) {
+    // Both present and valid in the URL — go straight in.
+    beginApp(BRANCH_ID, DEPT_ID);
+  } else if (branchOk && !deptOk) {
+    // Branch known, still need department.
+    showDeptPicker(BRANCH_ID);
+  } else {
+    // Nothing valid yet — start from branch selection.
+    showBranchPicker();
+  }
+});
+
+function showBranchPicker() {
+  document.getElementById('pickerBackBtn').style.display = 'none';
+  document.getElementById('pickerStepLabel').textContent = 'Step 1 of 2';
+  document.getElementById('pickerTitle').innerHTML = '<i class="fa-solid fa-store"></i> Select Your Branch';
+
+  const list = document.getElementById('pickerChoiceList');
+  list.innerHTML = BRANCH_OPTIONS.map(function (b) {
+    return '<button type="button" class="choice-btn" onclick="chooseBranch(\'' + b.id + '\')">' +
+             '<i class="fa-solid fa-store"></i> ' + escapeHtml(b.label) +
+           '</button>';
+  }).join('');
+
+  document.getElementById('pickerOverlay').style.display = 'flex';
+}
+
+function showDeptPicker(branchIdForStep) {
+  document.getElementById('pickerBackBtn').style.display = 'inline-block';
+  document.getElementById('pickerStepLabel').textContent = 'Step 2 of 2';
+  document.getElementById('pickerTitle').innerHTML = '<i class="fa-solid fa-building"></i> Select Your Department';
+
+  const list = document.getElementById('pickerChoiceList');
+  list.innerHTML = DEPARTMENT_OPTIONS.map(function (d) {
+    return '<button type="button" class="choice-btn" onclick="chooseDept(\'' + branchIdForStep + '\', \'' + d.id + '\')">' +
+             '<i class="fa-solid fa-tag"></i> ' + escapeHtml(d.label) +
+           '</button>';
+  }).join('');
+
+  document.getElementById('pickerOverlay').style.display = 'flex';
+}
+
+function pickerGoBack() {
+  showBranchPicker();
+}
+
+function chooseBranch(id) {
+  BRANCH_ID = id;
+  showDeptPicker(id);
+}
+
+function chooseDept(branchId, deptId) {
+  // Reflect the choice in the URL (without reloading) so a refresh/bookmark
+  // remembers both branch and department, then start the app.
+  const url = new URL(window.location.href);
+  url.searchParams.set('branch', branchId);
+  url.searchParams.set('dept', deptId);
+  window.history.replaceState({}, '', url);
+
+  document.getElementById('pickerOverlay').style.display = 'none';
+  beginApp(branchId, deptId);
+}
+
+function beginApp(branchId, deptId) {
+  BRANCH_ID = branchId;
+  DEPT_ID = deptId;
+
+  const branchMatch = BRANCH_OPTIONS.find(function (b) { return b.id === branchId; });
+  const deptMatch = DEPARTMENT_OPTIONS.find(function (d) { return d.id === deptId; });
+  BRANCH_LABEL = branchMatch ? branchMatch.label : branchId;
+  DEPT_LABEL = deptMatch ? deptMatch.label : deptId;
+
+  document.getElementById('branchPill').innerHTML = '<i class="fa-solid fa-store"></i> ' + escapeHtml(BRANCH_LABEL);
+  document.getElementById('deptPill').innerHTML = '<i class="fa-solid fa-building"></i> ' + escapeHtml(DEPT_LABEL);
+  document.getElementById('finalSubmitBtn').addEventListener('click', finalSubmit);
+
+  wireBluetoothScanner();
+  if (!cameraStarted) {
+    cameraStarted = true;
+    startCamera();
+  }
+}
+
+/* ============================================================================
+   CAMERA — starts automatically, stays live, scans continuously
+============================================================================ */
+function startCamera() {
+  html5QrCode = new Html5Qrcode('qrReader');
+
+  const config = {
+    fps: 20,
+    qrbox: { width: 250, height: 140 },
+    experimentalFeatures: {
+      useBarCodeDetectorIfSupported: true // uses the browser's native, much faster decoder when available
+    },
+    formatsToSupport: [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.CODE_128,
+      Html5QrcodeSupportedFormats.CODE_39,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.QR_CODE
+    ]
+  };
+
+  html5QrCode.start(
+    { facingMode: 'environment' },
+    config,
+    processScan,
+    function onFail() { /* silent — fires continuously while nothing is in frame */ }
+  ).then(function () {
+    setBanner('Point camera at a barcode...', '');
+  }).catch(function (err) {
+    setBanner('Camera error: ' + err, 'err');
+  });
+}
+
+/**
+ * Called by both the camera decoder and the Bluetooth scanner input.
+ * Instead of firing an API call immediately (which could overlap with a
+ * previous still-in-flight lookup and risk applying results out of order),
+ * every scan is pushed onto a queue and processed one at a time, strictly
+ * in the order they were scanned. This is what guarantees fast scanning
+ * never drops a barcode or mixes up which result belongs to which item.
+ */
+function processScan(decodedText) {
+  if (!BRANCH_ID || !DEPT_ID) return; // ignore scans until both are selected
+
+  const now = Date.now();
+  // Only dedupes REPEATS of the exact same code within the cooldown window
+  // (the camera "sees" the same barcode across many frames); different
+  // codes scanned back-to-back are never blocked by this.
+  if (decodedText === lastCode && (now - lastCodeTime) < SCAN_COOLDOWN_MS) return;
+  lastCode = decodedText;
+  lastCodeTime = now;
+
+  scanQueue.push(decodedText);
+  setBanner('Queued: ' + decodedText + (scanQueue.length > 1 ? '  (' + scanQueue.length + ' waiting)' : ''), '');
+  runQueue();
+}
+
+function runQueue() {
+  if (queueRunning) return;      // already draining the queue
+  if (scanQueue.length === 0) return;
+
+  queueRunning = true;
+  const code = scanQueue.shift();
+  setBanner('Looking up ' + code + '...', '');
+
+  // Item_Master is shared across branches, so only "dept" affects the
+  // catalog lookup — "branch" is included too in case you later want
+  // branch-aware last-counted-stock hints from the backend.
+  apiGet({ action: 'getItemByBarcode', code: code, dept: DEPT_ID, branch: BRANCH_ID })
+    .then(function (result) {
+      if (!result.found) {
+        playSound('beepError');
+        setBanner('❌ Not found: ' + code, 'err');
+        return;
+      }
+
+      const item = result.item;
+      const displayName = item.productName;
+
+      const existing = scannedItems.find(function (e) { return e.barcodeCode === item.userDefinedCode; });
+      if (existing) {
+        existing.countedQty += 1;
+      } else {
+        scannedItems.push({
+          barcodeCode: item.userDefinedCode,
+          itemName: displayName,
+          alternateUnit: item.stockUnit,
+          countedQty: 1
+        });
+      }
+
+      playSound('beepSuccess');
+      setBanner('✅ ' + displayName + (item.stockUnit ? ' (' + item.stockUnit + ')' : ''), 'ok');
+      renderList();
+    })
+    .catch(function (err) {
+      playSound('beepError');
+      setBanner('Lookup error — check connection.', 'err');
+    })
+    .finally(function () {
+      queueRunning = false;
+      if (scanQueue.length > 0) runQueue(); // immediately process the next queued scan
+    });
+}
+
+/* ============================================================================
+   BLUETOOTH BARCODE SCANNER SUPPORT
+   Bluetooth scanners behave like a keyboard: they "type" the barcode into
+   whatever input is focused, then send an Enter keypress automatically.
+   This hidden input stays focused at all times so a Bluetooth scanner
+   works alongside the camera without any extra setup.
+============================================================================ */
+function focusBtInput() {
+  const el = document.getElementById('btScannerInput');
+  if (el) el.focus();
+}
+
+function wireBluetoothScanner() {
+  const btInput = document.getElementById('btScannerInput');
+
+  btInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = btInput.value.trim();
+      btInput.value = '';
+      if (val.length > 0) processScan(val);
+    }
+  });
+
+  // Keep it focused so scans are captured the instant they happen.
+  focusBtInput();
+  document.addEventListener('click', function () {
+    setTimeout(focusBtInput, 50);
+  });
+  window.addEventListener('focus', focusBtInput);
+}
+
+function setBanner(text, cls) {
+  const el = document.getElementById('scanBanner');
+  el.textContent = text;
+  el.className = 'scan-banner' + (cls ? ' ' + cls : '');
+}
+
+/* ============================================================================
+   SCANNED ITEMS LIST
+============================================================================ */
+function renderList() {
+  const body = document.getElementById('scanTableBody');
+  const badge = document.getElementById('countBadge');
+  const submitBtn = document.getElementById('finalSubmitBtn');
+
+  badge.textContent = scannedItems.length + ' item' + (scannedItems.length === 1 ? '' : 's');
+  submitBtn.disabled = scannedItems.length === 0;
+
+  if (scannedItems.length === 0) {
+    body.innerHTML = '<tr><td colspan="4" class="empty-list">Point the camera at a barcode to start scanning...</td></tr>';
+    return;
+  }
+
+  const reversed = scannedItems.slice().reverse();
+  const originalIndexOf = function (entry) { return scannedItems.indexOf(entry); };
+
+  body.innerHTML = reversed.map(function (entry) {
+    const idx = originalIndexOf(entry);
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(entry.itemName) + '</td>' +
+        '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
+        '<td>' +
+          '<span class="qty-adjust">' +
+            '<button type="button" onclick="adjustQty(' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
+            '<span class="fw-semibold">' + escapeHtml(String(entry.countedQty)) + '</span>' +
+            '<button type="button" onclick="adjustQty(' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
+          '</span>' +
+        '</td>' +
+        '<td><button class="remove-btn" onclick="removeItem(' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
+      '</tr>'
+    );
+  }).join('');
+}
+
+function adjustQty(index, delta) {
+  const entry = scannedItems[index];
+  if (!entry) return;
+  entry.countedQty = Math.max(0, entry.countedQty + delta);
+  renderList();
+}
+
+function removeItem(index) {
+  scannedItems.splice(index, 1);
+  renderList();
+}
+
+/* ============================================================================
+   FINAL SUBMIT
+============================================================================ */
+function finalSubmit() {
+  if (scannedItems.length === 0) return;
+
+  const btn = document.getElementById('finalSubmitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  const entries = scannedItems.map(function (e) {
+    return {
+      barcodeCode: e.barcodeCode,
+      countedQty: e.countedQty,
+      operatorName: '',
+      remarks: ''
+    };
+  });
+
+  apiPost({ action: 'recordStockCountBatch', data: { branchId: BRANCH_ID, deptId: DEPT_ID, entries: entries } })
+    .then(function (result) {
+      btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Submit';
+      if (result.success) {
+        playSound('beepSuccess');
+        setBanner('✅ Saved ' + result.savedCount + ' items — ' + BRANCH_LABEL + ' / ' + DEPT_LABEL, 'ok');
+        scannedItems = [];
+        renderList();
+      } else {
+        playSound('beepError');
+        setBanner(result.message || 'Submit failed.', 'err');
+        btn.disabled = false;
+      }
+    })
+    .catch(function (err) {
+      btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Submit';
+      playSound('beepError');
+      setBanner('Error: ' + err.message, 'err');
+      btn.disabled = false;
+    });
+}
+
+/* ============================================================================
+   API HELPERS
+============================================================================ */
+function apiGet(params) {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
+    return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
+  }
+  const query = new URLSearchParams(params).toString();
+  return fetch(APPS_SCRIPT_URL + '?' + query, { method: 'GET' })
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error('Invalid API response — check deployment access is "Anyone".'); }
+    });
+}
+
+function apiPost(bodyObj) {
+  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
+    return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
+  }
+  return fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(bodyObj)
+  })
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error('Invalid API response — check deployment access is "Anyone".'); }
+    });
+}
+
+/* ============================================================================
+   UTILITIES
+============================================================================ */
+function playSound(id) {
+  const audio = document.getElementById(id);
+  if (audio) {
+    audio.currentTime = 0;
+    audio.play().catch(function () {});
+  }
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+</script>
+</body>
+</html>
