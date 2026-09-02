@@ -406,7 +406,9 @@ function startCamera() {
 function processScan(decodedText) {
   if (!BRANCH_ID) return;
 
-  const rawCode = String(decodedText || '').trim();
+  // Ignore any symbols the scanner might include around the code (#, $,
+  // etc.) — keep only letters/digits, same rule as the backend.
+  const rawCode = String(decodedText || '').trim().replace(/[^a-zA-Z0-9]/g, '');
   if (!rawCode) return;
 
   const now = Date.now();
