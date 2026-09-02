@@ -184,6 +184,11 @@
           <i class="fa-solid fa-tags"></i> Refresh Rates
         </button>
       </div>
+      <div class="col-6 col-md-2">
+        <button class="btn btn-outline-secondary w-100" type="button" id="reassignDeptBtn" title="Rewrite the Dept column on OLD log entries to match current Item_Master">
+          <i class="fa-solid fa-building-circle-arrow-right"></i> Reassign Depts
+        </button>
+      </div>
       <div class="col-12 col-md-2">
         <div class="dropdown">
           <button class="btn btn-brand w-100 dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -300,6 +305,7 @@ let lastSummary = null;  // holds the most recently loaded summary, for export/p
 document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('refreshBtn').addEventListener('click', loadSummary);
   document.getElementById('refreshRatesBtn').addEventListener('click', refreshRates);
+  document.getElementById('reassignDeptBtn').addEventListener('click', reassignDepartments);
   document.getElementById('lookupBtn').addEventListener('click', doLookup);
   document.getElementById('submitEntryBtn').addEventListener('click', submitManualEntry);
   document.getElementById('monthSelect').addEventListener('change', loadSummary);
@@ -328,6 +334,38 @@ function loadMonths() {
     })
     .catch(function () {
       showToast('Could not load months list.', true);
+    });
+}
+
+/* ============================================================================
+   REASSIGN DEPARTMENTS — one-time fix for OLD log rows whose Dept column
+   doesn't match Item_Master anymore (e.g. an item was moved to a
+   different department after it was originally scanned).
+============================================================================ */
+function reassignDepartments() {
+  if (!confirm('This will rewrite the Department column on EXISTING stock log entries in both branches, based on their CURRENT department in Item_Master. This cannot be undone automatically. Continue?')) {
+    return;
+  }
+
+  const btn = document.getElementById('reassignDeptBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Working...';
+
+  apiPost({ action: 'reassignDepartments' })
+    .then(function (result) {
+      if (result.success) {
+        showToast('✅ ' + result.message);
+        loadSummary(); // refresh the dashboard so corrected depts show immediately
+      } else {
+        showToast(result.message || 'Failed to reassign departments.', true);
+      }
+    })
+    .catch(function (err) {
+      showToast('Error: ' + err.message, true);
+    })
+    .finally(function () {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-building-circle-arrow-right"></i> Reassign Depts';
     });
 }
 
