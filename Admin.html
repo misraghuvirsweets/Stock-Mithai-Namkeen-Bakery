@@ -7,6 +7,9 @@
 
 <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 
 <style>
   :root{
@@ -124,6 +127,24 @@
   }
   .toast-msg.err{ background:#dc3545; }
   .toast-msg.show{ display:block; }
+
+  .grand-total-row td{
+    font-weight:800; background:#f6ede6; color:var(--brand-crimson-dark);
+    border-top:2px solid var(--brand-orange);
+  }
+
+  .print-only-header{ display:none; }
+
+  @media print {
+    body{ background:#fff; padding:0; }
+    .app-header{ background:#fff !important; color:var(--brand-crimson-dark) !important; box-shadow:none; }
+    .no-print{ display:none !important; }
+    .print-only-header{ display:block; margin-bottom:1rem; }
+    .print-only-header h4{ color:var(--brand-crimson-dark); font-weight:800; margin-bottom:.2rem; }
+    .print-only-header #printReportMeta{ font-size:.85rem; color:#555; }
+    .summary-card{ box-shadow:none; border:1px solid #ccc; }
+    .kpi-box{ box-shadow:none; border:1px solid #ccc; }
+  }
 </style>
 </head>
 <body>
@@ -139,7 +160,7 @@
 <div class="container-main">
 
   <!-- ===================== FILTER CONTROLS ===================== -->
-  <div class="controls-card">
+  <div class="controls-card no-print">
     <div class="row g-3 align-items-end">
       <div class="col-6 col-md-3">
         <label>Month</label>
@@ -153,16 +174,38 @@
           <option value="VISHRAMBAGH">Vishrambagh</option>
         </select>
       </div>
-      <div class="col-12 col-md-3">
+      <div class="col-6 col-md-2">
         <button class="btn btn-brand w-100" type="button" id="refreshBtn">
           <i class="fa-solid fa-rotate"></i> Refresh
         </button>
       </div>
+      <div class="col-6 col-md-2">
+        <button class="btn btn-outline-secondary w-100" type="button" id="refreshRatesBtn" title="Force the dashboard to re-read the latest rates from Item_Master">
+          <i class="fa-solid fa-tags"></i> Refresh Rates
+        </button>
+      </div>
+      <div class="col-12 col-md-2">
+        <div class="dropdown">
+          <button class="btn btn-brand w-100 dropdown-toggle" type="button" data-bs-toggle="dropdown">
+            <i class="fa-solid fa-file-export"></i> Export
+          </button>
+          <ul class="dropdown-menu w-100">
+            <li><a class="dropdown-item" href="#" onclick="exportPdf(); return false;"><i class="fa-solid fa-file-pdf"></i> Export as PDF</a></li>
+            <li><a class="dropdown-item" href="#" onclick="window.print(); return false;"><i class="fa-solid fa-print"></i> Print</a></li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 
+  <!-- ===================== PRINT-ONLY HEADER ===================== -->
+  <div class="print-only-header">
+    <h4>Raghuvir Sweets And Bakers — Stock Valuation Report</h4>
+    <div id="printReportMeta"></div>
+  </div>
+
   <!-- ===================== KPI SUMMARY ===================== -->
-  <div class="kpi-row">
+  <div class="kpi-row no-print">
     <div class="kpi-box accent">
       <div class="kpi-label">Total Valuation</div>
       <div class="kpi-value" id="kpiTotalAmount">₹0</div>
@@ -177,23 +220,24 @@
     </div>
   </div>
 
-  <!-- ===================== DEPARTMENT-WISE SUMMARY ===================== -->
+  <!-- ===================== ITEM-WISE VALUATION TABLE ===================== -->
   <div class="summary-card">
-    <div class="section-title"><i class="fa-solid fa-building"></i> Department-wise Stock Valuation</div>
+    <div class="section-title"><i class="fa-solid fa-table-list"></i> Item-wise Stock Valuation</div>
+    <div id="itemSummaryWrap">
+      <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+
+  <!-- ===================== DEPARTMENT ROLL-UP (KPI-style, for quick reference) ===================== -->
+  <div class="summary-card no-print">
+    <div class="section-title"><i class="fa-solid fa-building"></i> Department Roll-up</div>
     <div id="deptSummaryWrap">
       <div class="empty-state">Loading...</div>
     </div>
   </div>
 
-  <!-- ===================== BRANCH-WISE BREAKDOWN (when "All Branches" selected) ===================== -->
-  <div class="summary-card" id="branchBreakdownCard" style="display:none;">
-    <div class="section-title"><i class="fa-solid fa-store"></i> Branch-wise Breakdown</div>
-    <ul class="nav nav-pills branch-tabs mb-3" id="branchTabs"></ul>
-    <div id="branchTabContent"></div>
-  </div>
-
   <!-- ===================== ADD ENTRY (MANUAL) ===================== -->
-  <div class="add-entry-card">
+  <div class="add-entry-card no-print">
     <div class="section-title"><i class="fa-solid fa-plus-circle"></i> Add Entry Manually</div>
     <div class="row g-3">
       <div class="col-6 col-md-3">
@@ -251,9 +295,11 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyo-vJOoWzfd7PP
 const BRANCH_LABELS = { RAMMANDIR: 'Ram Mandir', VISHRAMBAGH: 'Vishrambagh' };
 
 let lookedUpItem = null; // holds the last successful barcode lookup for Add Entry
+let lastSummary = null;  // holds the most recently loaded summary, for export/print
 
 document.addEventListener('DOMContentLoaded', function () {
   document.getElementById('refreshBtn').addEventListener('click', loadSummary);
+  document.getElementById('refreshRatesBtn').addEventListener('click', refreshRates);
   document.getElementById('lookupBtn').addEventListener('click', doLookup);
   document.getElementById('submitEntryBtn').addEventListener('click', submitManualEntry);
   document.getElementById('monthSelect').addEventListener('change', loadSummary);
@@ -286,6 +332,29 @@ function loadMonths() {
 }
 
 /* ============================================================================
+   REFRESH RATES — force the dashboard to ignore its 10-minute item cache
+   and re-read Item_Master right now (useful right after editing rates).
+============================================================================ */
+function refreshRates() {
+  const btn = document.getElementById('refreshRatesBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  apiGet({ action: 'bumpItemCacheVersion' })
+    .then(function () {
+      showToast('✅ Rates refreshed from Item_Master.');
+      loadSummary();
+    })
+    .catch(function (err) {
+      showToast('Failed to refresh rates: ' + err.message, true);
+    })
+    .finally(function () {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-tags"></i> Refresh Rates';
+    });
+}
+
+/* ============================================================================
    SUMMARY LOAD + RENDER
 ============================================================================ */
 function loadSummary() {
@@ -294,17 +363,19 @@ function loadSummary() {
   const [year, month] = monthVal.split('-');
   const branch = document.getElementById('branchSelect').value;
 
-  document.getElementById('deptSummaryWrap').innerHTML = '<div class="empty-state">Loading...</div>';
+  document.getElementById('itemSummaryWrap').innerHTML = '<div class="empty-state">Loading...</div>';
 
   apiGet({ action: 'getAdminSummary', month: month, year: year, branch: branch === 'ALL' ? '' : branch })
     .then(function (summary) {
       if (summary.error) {
-        document.getElementById('deptSummaryWrap').innerHTML = '<div class="empty-state">' + escapeHtml(summary.error) + '</div>';
+        document.getElementById('itemSummaryWrap').innerHTML = '<div class="empty-state">' + escapeHtml(summary.error) + '</div>';
         return;
       }
+      lastSummary = summary;
       renderKpis(summary);
-      renderDeptSummary(summary);
-      renderBranchBreakdown(summary, branch);
+      renderItemTable(summary);
+      renderDeptRollup(summary);
+      renderPrintMeta(summary, branch);
     })
     .catch(function (err) {
       showToast('Failed to load summary: ' + err.message, true);
@@ -317,12 +388,59 @@ function renderKpis(summary) {
   document.getElementById('kpiDeptCount').textContent = Object.keys(summary.deptGrandTotals || {}).length;
 }
 
-function renderDeptSummary(summary) {
+function renderPrintMeta(summary, branch) {
+  const monthLabel = document.getElementById('monthSelect').selectedOptions[0]
+    ? document.getElementById('monthSelect').selectedOptions[0].textContent
+    : (summary.month + '/' + summary.year);
+  const branchLabel = branch === 'ALL' ? 'All Branches' : (BRANCH_LABELS[branch] || branch);
+  document.getElementById('printReportMeta').textContent =
+    monthLabel + '  •  ' + branchLabel + '  •  Generated ' + new Date().toLocaleString('en-IN');
+}
+
+function renderItemTable(summary) {
+  const wrap = document.getElementById('itemSummaryWrap');
+  const items = summary.items || [];
+
+  if (items.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No stock entries found for this month.</div>';
+    return;
+  }
+
+  const rows = items.map(function (it) {
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(it.name) + '</td>' +
+        '<td>' + escapeHtml(it.dept || '-') + '</td>' +
+        '<td>' + formatQty(it.qty) + ' ' + escapeHtml(it.unit || '') + '</td>' +
+        '<td>' + formatMoney(it.rate) + '</td>' +
+        '<td class="amount-cell">' + formatMoney(it.total) + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  wrap.innerHTML =
+    '<div class="table-responsive">' +
+      '<table class="table dept-table" id="itemValuationTable">' +
+        '<thead><tr><th>Item Name</th><th>Dept</th><th>Qty</th><th>Rate</th><th>Total</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '<tfoot>' +
+          '<tr class="grand-total-row">' +
+            '<td colspan="2">Grand Total</td>' +
+            '<td>' + formatQty(summary.grandTotalQty) + '</td>' +
+            '<td></td>' +
+            '<td>' + formatMoney(summary.grandTotalAmount) + '</td>' +
+          '</tr>' +
+        '</tfoot>' +
+      '</table>' +
+    '</div>';
+}
+
+function renderDeptRollup(summary) {
   const wrap = document.getElementById('deptSummaryWrap');
   const depts = Object.keys(summary.deptGrandTotals || {});
 
   if (depts.length === 0) {
-    wrap.innerHTML = '<div class="empty-state">No stock entries found for this month.</div>';
+    wrap.innerHTML = '<div class="empty-state">No department data for this month.</div>';
     return;
   }
 
@@ -354,67 +472,52 @@ function renderDeptSummary(summary) {
     '</div>';
 }
 
-function renderBranchBreakdown(summary, selectedBranch) {
-  const card = document.getElementById('branchBreakdownCard');
-  const tabsEl = document.getElementById('branchTabs');
-  const contentEl = document.getElementById('branchTabContent');
-
-  const branchKeys = Object.keys(summary.branches || {});
-
-  if (selectedBranch !== 'ALL' || branchKeys.length <= 1) {
-    card.style.display = 'none';
+/* ============================================================================
+   EXPORT TO PDF (client-side, via jsPDF + autotable — downloads a file)
+============================================================================ */
+function exportPdf() {
+  if (!lastSummary || !lastSummary.items || lastSummary.items.length === 0) {
+    showToast('Nothing to export yet — load a month with data first.', true);
     return;
   }
 
-  card.style.display = 'block';
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt' });
 
-  tabsEl.innerHTML = branchKeys.map(function (key, i) {
-    return '<li class="nav-item"><button class="nav-link' + (i === 0 ? ' active' : '') + '" data-branch="' + key + '" onclick="switchBranchTab(this)" type="button">' +
-             escapeHtml(summary.branches[key].label) +
-           '</button></li>';
-  }).join('');
+  const monthLabel = document.getElementById('monthSelect').selectedOptions[0]
+    ? document.getElementById('monthSelect').selectedOptions[0].textContent
+    : (lastSummary.month + '/' + lastSummary.year);
+  const branch = document.getElementById('branchSelect').value;
+  const branchLabel = branch === 'ALL' ? 'All Branches' : (BRANCH_LABELS[branch] || branch);
 
-  window._branchSummaryData = summary.branches;
-  renderBranchTabContent(branchKeys[0]);
-}
+  doc.setFontSize(14);
+  doc.setTextColor(165, 25, 42);
+  doc.text('Raghuvir Sweets And Bakers — Stock Valuation Report', 40, 40);
+  doc.setFontSize(10);
+  doc.setTextColor(80, 80, 80);
+  doc.text(monthLabel + '   |   ' + branchLabel + '   |   Generated ' + new Date().toLocaleString('en-IN'), 40, 58);
 
-function switchBranchTab(btn) {
-  document.querySelectorAll('#branchTabs .nav-link').forEach(function (el) { el.classList.remove('active'); });
-  btn.classList.add('active');
-  renderBranchTabContent(btn.getAttribute('data-branch'));
-}
+  const tableBody = lastSummary.items.map(function (it) {
+    return [it.name, it.dept || '-', formatQty(it.qty) + ' ' + (it.unit || ''), formatMoney(it.rate), formatMoney(it.total)];
+  });
+  tableBody.push([
+    { content: 'Grand Total', colSpan: 2, styles: { fontStyle: 'bold' } },
+    { content: formatQty(lastSummary.grandTotalQty), styles: { fontStyle: 'bold' } },
+    '',
+    { content: formatMoney(lastSummary.grandTotalAmount), styles: { fontStyle: 'bold' } }
+  ]);
 
-function renderBranchTabContent(branchKey) {
-  const data = (window._branchSummaryData || {})[branchKey];
-  const contentEl = document.getElementById('branchTabContent');
-  if (!data) { contentEl.innerHTML = '<div class="empty-state">No data.</div>'; return; }
+  doc.autoTable({
+    startY: 75,
+    head: [['Item Name', 'Dept', 'Qty', 'Rate', 'Total']],
+    body: tableBody,
+    headStyles: { fillColor: [165, 25, 42] },
+    styles: { fontSize: 9, cellPadding: 5 },
+    columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } }
+  });
 
-  const depts = Object.keys(data.deptTotals || {});
-  if (depts.length === 0) {
-    contentEl.innerHTML = '<div class="empty-state">No entries for ' + escapeHtml(data.label) + ' this month.</div>';
-    return;
-  }
-
-  const rows = depts.map(function (d) {
-    const dd = data.deptTotals[d];
-    return (
-      '<tr>' +
-        '<td>' + escapeHtml(d) + '</td>' +
-        '<td>' + formatQty(dd.qty) + '</td>' +
-        '<td class="amount-cell">' + formatMoney(dd.amount) + '</td>' +
-        '<td>' + dd.entryCount + '</td>' +
-      '</tr>'
-    );
-  }).join('');
-
-  contentEl.innerHTML =
-    '<div class="table-responsive">' +
-      '<table class="table dept-table">' +
-        '<thead><tr><th>Department</th><th>Qty</th><th>Valuation</th><th>Entries</th></tr></thead>' +
-        '<tbody>' + rows + '</tbody>' +
-        '<tfoot><tr style="font-weight:800;"><td>Total</td><td>' + formatQty(data.totalQty) + '</td><td class="amount-cell">' + formatMoney(data.totalAmount) + '</td><td>' + data.entryCount + '</td></tr></tfoot>' +
-      '</table>' +
-    '</div>';
+  const fileName = 'Stock_Valuation_' + monthLabel.replace(/\s+/g, '_') + '_' + branchLabel.replace(/\s+/g, '_') + '.pdf';
+  doc.save(fileName);
 }
 
 /* ============================================================================
