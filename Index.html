@@ -149,6 +149,18 @@
     vertical-align:middle;
     padding:.65rem .9rem;
   }
+  .weight-tag{
+    display:inline-block;
+    background:var(--brand-orange-light);
+    color:var(--brand-crimson-dark);
+    border:1px solid #f0d3b8;
+    font-size:.68rem;
+    font-weight:800;
+    padding:.05rem .4rem;
+    border-radius:6px;
+    margin-left:.35rem;
+    vertical-align:middle;
+  }
   .qty-adjust{ 
     display:inline-flex; 
     align-items:center; 
@@ -289,6 +301,14 @@ const BRANCH_OPTIONS = [
   { id: 'VISHRAMBAGH', label: 'Vishrambagh' }
 ];
 
+/* ============================================================================
+   WEIGHT ITEM QTY STEP
+   For weighed items (decoded from a weight-embedded barcode) the +/-
+   buttons adjust by this many KG per tap, since counts are fractional
+   (e.g. 0.750 kg) rather than whole pieces.
+============================================================================ */
+const WEIGHT_QTY_STEP_KG = 0.050;
+
 const urlParams = new URLSearchParams(window.location.search);
 let BRANCH_ID = (urlParams.get('branch') || '').toUpperCase();
 let BRANCH_LABEL = '';
@@ -417,8 +437,34 @@ function runQueue() {
 
       const item = result.item;
       const displayName = item.printName || item.productName;
+      const isWeightItem = !!item.isWeightItem;
 
-      const existing = scannedItems.find(function (e) { return e.barcodeCode.toLowerCase() === item.userDefinedCode.toLowerCase(); });
+      if (isWeightItem) {
+        // Each weighed packet is its own line — never merge two different
+        // weighings of the same sweet, since the weight (and therefore the
+        // counted quantity) is different every time.
+        scannedItems.push({
+          barcodeCode: item.userDefinedCode,
+          itemName: displayName,
+          alternateUnit: 'Kg',
+          countedQty: item.weightKg,
+          isWeightItem: true,
+          weightGrams: item.weightGrams,
+          computedAmount: item.computedAmount
+        });
+        renderList();
+
+        const amountText = item.computedAmount ? ('  ₹' + item.computedAmount) : '';
+        playSound('beepSuccess');
+        setBanner('✅ ' + displayName + '  —  ' + item.weightKg.toFixed(3) + ' kg' + amountText, 'ok');
+        return;
+      }
+
+      // Normal (non-weight) item — same behaviour as before: repeat scans
+      // of the same barcode just bump the count by 1.
+      const existing = scannedItems.find(function (e) {
+        return !e.isWeightItem && e.barcodeCode.toLowerCase() === item.userDefinedCode.toLowerCase();
+      });
       if (existing) {
         existing.countedQty += 1;
         updateQtyDisplay(scannedItems.indexOf(existing));
@@ -427,7 +473,8 @@ function runQueue() {
           barcodeCode: item.userDefinedCode,
           itemName: displayName,
           alternateUnit: item.stockUnit,
-          countedQty: 1
+          countedQty: 1,
+          isWeightItem: false
         });
         renderList();
       }
@@ -476,6 +523,10 @@ function setBanner(text, cls) {
   el.className = 'scan-banner' + (cls ? ' ' + cls : '');
 }
 
+function formatQty(entry) {
+  return entry.isWeightItem ? entry.countedQty.toFixed(3) : String(entry.countedQty);
+}
+
 function renderList() {
   const body = document.getElementById('scanTableBody');
   const badge = document.getElementById('countBadge');
@@ -494,15 +545,18 @@ function renderList() {
 
   body.innerHTML = reversed.map(function (entry) {
     const idx = originalIndexOf(entry);
+    const step = entry.isWeightItem ? WEIGHT_QTY_STEP_KG : 1;
     return (
       '<tr id="row-item-' + idx + '">' +
-        '<td>' + escapeHtml(entry.itemName) + '</td>' +
+        '<td>' + escapeHtml(entry.itemName) +
+          (entry.isWeightItem ? '<span class="weight-tag">WEIGHED</span>' : '') +
+        '</td>' +
         '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
         '<td>' +
           '<span class="qty-adjust">' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', -1)"><i class="fa-solid fa-minus"></i></button>' +
-            '<span class="fw-semibold mx-2" id="qty-val-' + idx + '" style="user-select:none;">' + escapeHtml(String(entry.countedQty)) + '</span>' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', 1)"><i class="fa-solid fa-plus"></i></button>' +
+            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + (-step) + ')"><i class="fa-solid fa-minus"></i></button>' +
+            '<span class="fw-semibold mx-2" id="qty-val-' + idx + '" style="user-select:none;">' + escapeHtml(formatQty(entry)) + '</span>' +
+            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + step + ')"><i class="fa-solid fa-plus"></i></button>' +
           '</span>' +
         '</td>' +
         '<td><button type="button" tabindex="-1" class="remove-btn" onpointerdown="fastRemoveItem(event, ' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
@@ -530,14 +584,18 @@ function fastRemoveItem(e, index) {
 function adjustQty(index, delta) {
   const entry = scannedItems[index];
   if (!entry) return;
-  entry.countedQty = Math.max(0, entry.countedQty + delta);
+  let next = entry.countedQty + delta;
+  if (entry.isWeightItem) {
+    next = Math.round(next * 1000) / 1000; // avoid floating-point drift on kg steps
+  }
+  entry.countedQty = Math.max(0, next);
   updateQtyDisplay(index);
 }
 
 function updateQtyDisplay(index) {
   const el = document.getElementById('qty-val-' + index);
   if (el && scannedItems[index]) {
-    el.textContent = String(scannedItems[index].countedQty);
+    el.textContent = formatQty(scannedItems[index]);
   } else {
     renderList();
   }
