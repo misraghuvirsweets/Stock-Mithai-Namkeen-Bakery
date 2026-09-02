@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raghuvir Sweets And Bakers | Admin Dashboard</title>
+
+<link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+
+<style>
+  :root{
+    --brand-crimson:#a5192a;
+    --brand-crimson-dark:#7d1220;
+    --brand-orange:#f5871f;
+    --brand-orange-light:#fff3e6;
+    --bg-soft:#faf7f5;
+    --ink:#2b2320;
+  }
+  * { box-sizing: border-box; }
+  body{
+    background:var(--bg-soft);
+    color:var(--ink);
+    font-family:'Segoe UI', Roboto, Arial, sans-serif;
+    padding-bottom:2rem;
+  }
+
+  .app-header{
+    background:linear-gradient(90deg, var(--brand-crimson) 0%, var(--brand-crimson-dark) 100%);
+    color:#fff;
+    padding:.9rem 1.2rem;
+    display:flex;
+    align-items:center;
+    gap:.6rem;
+    flex-wrap:wrap;
+  }
+  .app-header .brand-logo{
+    height:38px; width:38px; object-fit:contain; border-radius:8px; background:#fff; padding:2px;
+  }
+  .app-header .brand-name{ font-weight:700; font-size:1.05rem; line-height:1.1; }
+  .app-header .subtitle{ font-size:.75rem; opacity:.85; }
+
+  .container-main{ max-width:1100px; margin:0 auto; padding:1rem; }
+
+  .controls-card, .summary-card, .add-entry-card{
+    background:#fff;
+    border-radius:14px;
+    border:1px solid #eee0d8;
+    box-shadow:0 2px 10px rgba(165,25,42,.06);
+    padding:1rem 1.1rem;
+    margin-bottom:1rem;
+  }
+  .controls-card label, .add-entry-card label{
+    font-size:.78rem; font-weight:700; color:var(--brand-crimson-dark);
+    text-transform:uppercase; letter-spacing:.3px; margin-bottom:.25rem;
+  }
+  .form-select, .form-control{
+    border-radius:8px; border:1px solid #e6d7cc;
+  }
+  .form-select:focus, .form-control:focus{
+    border-color:var(--brand-orange); box-shadow:0 0 0 .15rem rgba(245,135,31,.15);
+  }
+
+  .kpi-row{ display:flex; gap:.75rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .kpi-box{
+    flex:1; min-width:150px;
+    background:#fff;
+    border-radius:14px;
+    border:1px solid #eee0d8;
+    box-shadow:0 2px 10px rgba(165,25,42,.06);
+    padding:.9rem 1rem;
+  }
+  .kpi-box .kpi-label{ font-size:.72rem; text-transform:uppercase; letter-spacing:.4px; color:#a99184; font-weight:700; }
+  .kpi-box .kpi-value{ font-size:1.5rem; font-weight:800; color:var(--brand-crimson-dark); margin-top:.15rem; }
+  .kpi-box.accent{ background:linear-gradient(135deg, var(--brand-crimson), var(--brand-crimson-dark)); border:none; }
+  .kpi-box.accent .kpi-label{ color:rgba(255,255,255,.75); }
+  .kpi-box.accent .kpi-value{ color:#fff; }
+
+  .section-title{
+    font-weight:800; color:var(--brand-crimson-dark); font-size:1rem;
+    margin-bottom:.7rem; display:flex; align-items:center; gap:.4rem;
+  }
+
+  .dept-table{ width:100%; margin-bottom:0; }
+  .dept-table thead th{
+    background:#f6ede6; color:var(--brand-crimson-dark);
+    font-size:.72rem; text-transform:uppercase; letter-spacing:.3px;
+    border:none; padding:.6rem .8rem;
+  }
+  .dept-table tbody td{ font-size:.9rem; padding:.55rem .8rem; vertical-align:middle; }
+  .dept-table tbody tr:nth-child(even){ background:#fbf6f2; }
+  .dept-bar-wrap{
+    background:#f1e5dc; border-radius:6px; height:8px; overflow:hidden; margin-top:.25rem;
+  }
+  .dept-bar{ background:var(--brand-orange); height:100%; border-radius:6px; }
+  .amount-cell{ font-weight:700; color:var(--brand-crimson-dark); }
+  .branch-tabs .nav-link{
+    color:var(--brand-crimson-dark); font-weight:700; font-size:.85rem;
+  }
+  .branch-tabs .nav-link.active{
+    background:var(--brand-crimson); color:#fff;
+  }
+
+  .btn-brand{
+    background:linear-gradient(90deg, var(--brand-crimson), var(--brand-crimson-dark));
+    border:none; color:#fff; font-weight:700; border-radius:8px;
+  }
+  .btn-brand:hover{ color:#fff; opacity:.92; }
+
+  .lookup-preview{
+    background:var(--brand-orange-light); border:1px solid #f0d3b8; border-radius:8px;
+    padding:.6rem .8rem; font-size:.85rem; margin-top:.5rem; display:none;
+  }
+  .lookup-preview.show{ display:block; }
+  .lookup-preview.err{ background:#fde2e2; border-color:#f5b5b5; color:#7d1220; }
+
+  .empty-state{ text-align:center; color:#a99184; padding:2rem; font-size:.9rem; }
+
+  .toast-msg{
+    position:fixed; bottom:1rem; right:1rem; z-index:2000;
+    background:#1fa04a; color:#fff; padding:.7rem 1.1rem; border-radius:10px;
+    font-weight:700; font-size:.85rem; box-shadow:0 4px 16px rgba(0,0,0,.2);
+    display:none;
+  }
+  .toast-msg.err{ background:#dc3545; }
+  .toast-msg.show{ display:block; }
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
+  <div>
+    <div class="brand-name">Raghuvir Stock — Admin Dashboard</div>
+    <div class="subtitle">Month-wise &amp; department-wise stock valuation</div>
+  </div>
+</div>
+
+<div class="container-main">
+
+  <!-- ===================== FILTER CONTROLS ===================== -->
+  <div class="controls-card">
+    <div class="row g-3 align-items-end">
+      <div class="col-6 col-md-3">
+        <label>Month</label>
+        <select class="form-select" id="monthSelect"></select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label>Branch</label>
+        <select class="form-select" id="branchSelect">
+          <option value="ALL">All Branches</option>
+          <option value="RAMMANDIR">Ram Mandir</option>
+          <option value="VISHRAMBAGH">Vishrambagh</option>
+        </select>
+      </div>
+      <div class="col-12 col-md-3">
+        <button class="btn btn-brand w-100" type="button" id="refreshBtn">
+          <i class="fa-solid fa-rotate"></i> Refresh
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== KPI SUMMARY ===================== -->
+  <div class="kpi-row">
+    <div class="kpi-box accent">
+      <div class="kpi-label">Total Valuation</div>
+      <div class="kpi-value" id="kpiTotalAmount">₹0</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-label">Total Entries</div>
+      <div class="kpi-value" id="kpiTotalEntries">0</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-label">Departments</div>
+      <div class="kpi-value" id="kpiDeptCount">0</div>
+    </div>
+  </div>
+
+  <!-- ===================== DEPARTMENT-WISE SUMMARY ===================== -->
+  <div class="summary-card">
+    <div class="section-title"><i class="fa-solid fa-building"></i> Department-wise Stock Valuation</div>
+    <div id="deptSummaryWrap">
+      <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+
+  <!-- ===================== BRANCH-WISE BREAKDOWN (when "All Branches" selected) ===================== -->
+  <div class="summary-card" id="branchBreakdownCard" style="display:none;">
+    <div class="section-title"><i class="fa-solid fa-store"></i> Branch-wise Breakdown</div>
+    <ul class="nav nav-pills branch-tabs mb-3" id="branchTabs"></ul>
+    <div id="branchTabContent"></div>
+  </div>
+
+  <!-- ===================== ADD ENTRY (MANUAL) ===================== -->
+  <div class="add-entry-card">
+    <div class="section-title"><i class="fa-solid fa-plus-circle"></i> Add Entry Manually</div>
+    <div class="row g-3">
+      <div class="col-6 col-md-3">
+        <label>Branch</label>
+        <select class="form-select" id="entryBranch">
+          <option value="RAMMANDIR">Ram Mandir</option>
+          <option value="VISHRAMBAGH">Vishrambagh</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label>Barcode / Code</label>
+        <input type="text" class="form-control" id="entryBarcode" placeholder="Scan or type code">
+      </div>
+      <div class="col-6 col-md-2">
+        <label>Quantity</label>
+        <input type="number" step="0.001" min="0" class="form-control" id="entryQty" placeholder="e.g. 5 or 0.750">
+      </div>
+      <div class="col-6 col-md-2">
+        <label>Operator</label>
+        <input type="text" class="form-control" id="entryOperator" placeholder="Name">
+      </div>
+      <div class="col-12 col-md-2">
+        <label>&nbsp;</label>
+        <button class="btn btn-brand w-100" type="button" id="lookupBtn">
+          <i class="fa-solid fa-magnifying-glass"></i> Lookup
+        </button>
+      </div>
+    </div>
+    <div class="row g-3 mt-1">
+      <div class="col-12">
+        <label>Remarks (optional)</label>
+        <input type="text" class="form-control" id="entryRemarks" placeholder="Any notes for this entry">
+      </div>
+    </div>
+
+    <div class="lookup-preview" id="lookupPreview"></div>
+
+    <div class="mt-3">
+      <button class="btn btn-brand" type="button" id="submitEntryBtn" disabled>
+        <i class="fa-solid fa-check"></i> Submit Entry
+      </button>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast-msg" id="toastMsg"></div>
+
+<script>
+/* ============================================================================
+   ⚠️ REQUIRED CONFIG — same Apps Script Web App URL as Index.html.
+============================================================================ */
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyo-vJOoWzfd7PPKIaOCdqDn3W3GUYXQsFjESVl3Iqnh4uuOXF6j903cTwj2nmdlpkP_g/exec';
+
+const BRANCH_LABELS = { RAMMANDIR: 'Ram Mandir', VISHRAMBAGH: 'Vishrambagh' };
+
+let lookedUpItem = null; // holds the last successful barcode lookup for Add Entry
+
+document.addEventListener('DOMContentLoaded', function () {
+  document.getElementById('refreshBtn').addEventListener('click', loadSummary);
+  document.getElementById('lookupBtn').addEventListener('click', doLookup);
+  document.getElementById('submitEntryBtn').addEventListener('click', submitManualEntry);
+  document.getElementById('monthSelect').addEventListener('change', loadSummary);
+  document.getElementById('branchSelect').addEventListener('change', loadSummary);
+
+  loadMonths();
+});
+
+/* ============================================================================
+   MONTH DROPDOWN
+============================================================================ */
+function loadMonths() {
+  apiGet({ action: 'getAvailableMonths' })
+    .then(function (months) {
+      const select = document.getElementById('monthSelect');
+      if (!Array.isArray(months) || months.length === 0) {
+        // Fall back to the current month so the dashboard is still usable
+        // even before any stock entries exist yet.
+        const now = new Date();
+        months = [{ year: now.getFullYear(), month: now.getMonth() + 1, label: now.toLocaleString('en-US', { month: 'short', year: 'numeric' }) }];
+      }
+      select.innerHTML = months.map(function (m) {
+        return '<option value="' + m.year + '-' + m.month + '">' + escapeHtml(m.label) + '</option>';
+      }).join('');
+      loadSummary();
+    })
+    .catch(function () {
+      showToast('Could not load months list.', true);
+    });
+}
+
+/* ============================================================================
+   SUMMARY LOAD + RENDER
+============================================================================ */
+function loadSummary() {
+  const monthVal = document.getElementById('monthSelect').value;
+  if (!monthVal) return;
+  const [year, month] = monthVal.split('-');
+  const branch = document.getElementById('branchSelect').value;
+
+  document.getElementById('deptSummaryWrap').innerHTML = '<div class="empty-state">Loading...</div>';
+
+  apiGet({ action: 'getAdminSummary', month: month, year: year, branch: branch === 'ALL' ? '' : branch })
+    .then(function (summary) {
+      if (summary.error) {
+        document.getElementById('deptSummaryWrap').innerHTML = '<div class="empty-state">' + escapeHtml(summary.error) + '</div>';
+        return;
+      }
+      renderKpis(summary);
+      renderDeptSummary(summary);
+      renderBranchBreakdown(summary, branch);
+    })
+    .catch(function (err) {
+      showToast('Failed to load summary: ' + err.message, true);
+    });
+}
+
+function renderKpis(summary) {
+  document.getElementById('kpiTotalAmount').textContent = formatMoney(summary.grandTotalAmount);
+  document.getElementById('kpiTotalEntries').textContent = summary.grandEntryCount;
+  document.getElementById('kpiDeptCount').textContent = Object.keys(summary.deptGrandTotals || {}).length;
+}
+
+function renderDeptSummary(summary) {
+  const wrap = document.getElementById('deptSummaryWrap');
+  const depts = Object.keys(summary.deptGrandTotals || {});
+
+  if (depts.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No stock entries found for this month.</div>';
+    return;
+  }
+
+  const rows = depts
+    .map(function (d) { return { name: d, data: summary.deptGrandTotals[d] }; })
+    .sort(function (a, b) { return b.data.amount - a.data.amount; });
+
+  const maxAmount = Math.max.apply(null, rows.map(function (r) { return r.data.amount; }).concat([1]));
+
+  const tableRows = rows.map(function (r) {
+    const pct = Math.max(2, Math.round((r.data.amount / maxAmount) * 100));
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(r.name) +
+          '<div class="dept-bar-wrap"><div class="dept-bar" style="width:' + pct + '%"></div></div>' +
+        '</td>' +
+        '<td>' + formatQty(r.data.qty) + '</td>' +
+        '<td class="amount-cell">' + formatMoney(r.data.amount) + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  wrap.innerHTML =
+    '<div class="table-responsive">' +
+      '<table class="table dept-table">' +
+        '<thead><tr><th>Department</th><th>Total Qty</th><th>Valuation</th></tr></thead>' +
+        '<tbody>' + tableRows + '</tbody>' +
+      '</table>' +
+    '</div>';
+}
+
+function renderBranchBreakdown(summary, selectedBranch) {
+  const card = document.getElementById('branchBreakdownCard');
+  const tabsEl = document.getElementById('branchTabs');
+  const contentEl = document.getElementById('branchTabContent');
+
+  const branchKeys = Object.keys(summary.branches || {});
+
+  if (selectedBranch !== 'ALL' || branchKeys.length <= 1) {
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'block';
+
+  tabsEl.innerHTML = branchKeys.map(function (key, i) {
+    return '<li class="nav-item"><button class="nav-link' + (i === 0 ? ' active' : '') + '" data-branch="' + key + '" onclick="switchBranchTab(this)" type="button">' +
+             escapeHtml(summary.branches[key].label) +
+           '</button></li>';
+  }).join('');
+
+  window._branchSummaryData = summary.branches;
+  renderBranchTabContent(branchKeys[0]);
+}
+
+function switchBranchTab(btn) {
+  document.querySelectorAll('#branchTabs .nav-link').forEach(function (el) { el.classList.remove('active'); });
+  btn.classList.add('active');
+  renderBranchTabContent(btn.getAttribute('data-branch'));
+}
+
+function renderBranchTabContent(branchKey) {
+  const data = (window._branchSummaryData || {})[branchKey];
+  const contentEl = document.getElementById('branchTabContent');
+  if (!data) { contentEl.innerHTML = '<div class="empty-state">No data.</div>'; return; }
+
+  const depts = Object.keys(data.deptTotals || {});
+  if (depts.length === 0) {
+    contentEl.innerHTML = '<div class="empty-state">No entries for ' + escapeHtml(data.label) + ' this month.</div>';
+    return;
+  }
+
+  const rows = depts.map(function (d) {
+    const dd = data.deptTotals[d];
+    return (
+      '<tr>' +
+        '<td>' + escapeHtml(d) + '</td>' +
+        '<td>' + formatQty(dd.qty) + '</td>' +
+        '<td class="amount-cell">' + formatMoney(dd.amount) + '</td>' +
+        '<td>' + dd.entryCount + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  contentEl.innerHTML =
+    '<div class="table-responsive">' +
+      '<table class="table dept-table">' +
+        '<thead><tr><th>Department</th><th>Qty</th><th>Valuation</th><th>Entries</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+        '<tfoot><tr style="font-weight:800;"><td>Total</td><td>' + formatQty(data.totalQty) + '</td><td class="amount-cell">' + formatMoney(data.totalAmount) + '</td><td>' + data.entryCount + '</td></tr></tfoot>' +
+      '</table>' +
+    '</div>';
+}
+
+/* ============================================================================
+   ADD ENTRY (MANUAL)
+============================================================================ */
+function doLookup() {
+  const code = document.getElementById('entryBarcode').value.trim().replace(/[^a-zA-Z0-9]/g, '');
+  const branch = document.getElementById('entryBranch').value;
+  const preview = document.getElementById('lookupPreview');
+
+  if (!code) {
+    preview.className = 'lookup-preview show err';
+    preview.textContent = 'Enter a barcode/code first.';
+    return;
+  }
+
+  preview.className = 'lookup-preview show';
+  preview.textContent = 'Looking up...';
+  document.getElementById('submitEntryBtn').disabled = true;
+  lookedUpItem = null;
+
+  apiGet({ action: 'getItemByBarcode', code: code, branch: branch })
+    .then(function (result) {
+      if (!result.found) {
+        preview.className = 'lookup-preview show err';
+        preview.textContent = '❌ ' + (result.message || 'Item not found.');
+        return;
+      }
+      lookedUpItem = result.item;
+      const name = lookedUpItem.printName || lookedUpItem.productName;
+      const unitText = lookedUpItem.isWeightItem
+        ? (lookedUpItem.weightKg.toFixed(3) + ' kg decoded from barcode')
+        : ('Unit: ' + (lookedUpItem.stockUnit || 'Pcs'));
+
+      preview.className = 'lookup-preview show';
+      preview.innerHTML = '<strong>' + escapeHtml(name) + '</strong> — ' + escapeHtml(lookedUpItem.dept || '-') +
+                           '<br>' + escapeHtml(unitText);
+
+      if (lookedUpItem.isWeightItem) {
+        document.getElementById('entryQty').value = lookedUpItem.weightKg;
+      }
+      document.getElementById('submitEntryBtn').disabled = false;
+    })
+    .catch(function (err) {
+      preview.className = 'lookup-preview show err';
+      preview.textContent = 'Lookup error: ' + err.message;
+    });
+}
+
+function submitManualEntry() {
+  const branch = document.getElementById('entryBranch').value;
+  const code = document.getElementById('entryBarcode').value.trim().replace(/[^a-zA-Z0-9]/g, '');
+  const qty = Number(document.getElementById('entryQty').value);
+  const operator = document.getElementById('entryOperator').value.trim() || 'Admin';
+  const remarks = document.getElementById('entryRemarks').value.trim();
+
+  if (!code) { showToast('Enter a barcode/code first.', true); return; }
+  if (isNaN(qty) || qty <= 0) { showToast('Enter a valid quantity.', true); return; }
+
+  const btn = document.getElementById('submitEntryBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  apiPost({
+    action: 'addManualEntry',
+    data: { branchId: branch, barcodeCode: code, countedQty: qty, operatorName: operator, remarks: remarks }
+  })
+    .then(function (result) {
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> Submit Entry';
+      if (result.success) {
+        showToast('✅ Entry saved to ' + (BRANCH_LABELS[branch] || branch));
+        document.getElementById('entryBarcode').value = '';
+        document.getElementById('entryQty').value = '';
+        document.getElementById('entryRemarks').value = '';
+        document.getElementById('lookupPreview').className = 'lookup-preview';
+        lookedUpItem = null;
+        loadSummary(); // refresh totals to reflect the new entry
+      } else {
+        showToast(result.message || 'Failed to save entry.', true);
+        btn.disabled = false;
+      }
+    })
+    .catch(function (err) {
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> Submit Entry';
+      showToast('Error: ' + err.message, true);
+      btn.disabled = false;
+    });
+}
+
+/* ============================================================================
+   API HELPERS
+============================================================================ */
+function apiGet(params) {
+  const query = new URLSearchParams(params).toString();
+  return fetch(APPS_SCRIPT_URL + '?' + query, { method: 'GET' })
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error('Invalid API response.'); }
+    });
+}
+
+function apiPost(bodyObj) {
+  return fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(bodyObj)
+  })
+    .then(function (res) { return res.text(); })
+    .then(function (text) {
+      try { return JSON.parse(text); }
+      catch (e) { throw new Error('Invalid API response.'); }
+    });
+}
+
+/* ============================================================================
+   UTILITIES
+============================================================================ */
+function formatMoney(n) {
+  n = Number(n) || 0;
+  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatQty(n) {
+  n = Number(n) || 0;
+  return (n % 1 === 0) ? String(n) : n.toFixed(3);
+}
+
+function showToast(msg, isError) {
+  const el = document.getElementById('toastMsg');
+  el.textContent = msg;
+  el.className = 'toast-msg show' + (isError ? ' err' : '');
+  setTimeout(function () { el.className = 'toast-msg'; }, 3500);
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+</script>
+</body>
+</html>
