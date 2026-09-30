@@ -314,14 +314,11 @@ const WEIGHT_BARCODE_WEIGHT_LEN    = 5;
 const WEIGHT_BARCODE_TOTAL_LEN     = WEIGHT_BARCODE_ITEM_CODE_LEN + WEIGHT_BARCODE_WEIGHT_LEN;
 
 /* ============================================================================
-   ON-DEVICE ITEM INDEX (fast scan identification)
-   The whole Item_Master is downloaded once (action=getItemIndex) and kept
-   on the phone, so a scan is identified instantly without waiting for the
-   server. If a code isn't in the local copy, the old server lookup is
-   used as a fallback, so newly added items still work.
+   ON-DEVICE ITEM INDEX (instant scan identification)
 ============================================================================ */
 const ITEM_INDEX_STORAGE_KEY = 'rsb_item_index_v1';
-let itemIndex = null; // { lowercaseCode: [code, printName, productName, dept, unit, saleRate, perGramRate] }
+let itemIndex = null;        // { lowercaseCode: [code, printName, productName, dept, unit, saleRate, perGramRate] }
+let itemIndexLoading = null; // Promise while the first download is in progress
 
 const urlParams = new URLSearchParams(window.location.search);
 let BRANCH_ID = (urlParams.get('branch') || '').toUpperCase();
@@ -341,9 +338,8 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('configBanner').style.display = 'block';
   }
 
-  // Start loading the item list straight away (even while the branch
-  // picker is showing) so it's ready before the first scan.
   loadItemIndex();
+  initSounds();
 
   const knownIds = BRANCH_OPTIONS.map(function (b) { return b.id; });
 
@@ -358,17 +354,17 @@ document.addEventListener('DOMContentLoaded', function () {
    ITEM INDEX LOAD / LOOKUP
 --------------------------------------------------------------------------- */
 function loadItemIndex() {
-  // 1) Instant: use the copy saved on this phone from last time.
+  // 1) Instant: copy saved on this phone from last time.
   try {
     const raw = localStorage.getItem(ITEM_INDEX_STORAGE_KEY);
     if (raw) {
       const saved = JSON.parse(raw);
       if (saved && Array.isArray(saved.items)) buildItemIndex(saved.items);
     }
-  } catch (e) { /* storage unavailable — fine, fetch below */ }
+  } catch (e) { /* storage unavailable */ }
 
-  // 2) Background: fetch the latest list from Item_Master.
-  apiGet({ action: 'getItemIndex' })
+  // 2) Background: latest list from Item_Master.
+  itemIndexLoading = apiGet({ action: 'getItemIndex' })
     .then(function (res) {
       if (!res || !Array.isArray(res.items)) return;
       buildItemIndex(res.items);
@@ -376,9 +372,10 @@ function loadItemIndex() {
         localStorage.setItem(ITEM_INDEX_STORAGE_KEY, JSON.stringify({
           version: res.version, savedAt: Date.now(), items: res.items
         }));
-      } catch (e) { /* storage full/unavailable — in-memory copy still works */ }
+      } catch (e) { /* storage full — in-memory copy still works */ }
     })
-    .catch(function () { /* offline — keep using saved copy / server fallback */ });
+    .catch(function () { /* offline — saved copy / server fallback */ })
+    .then(function () { itemIndexLoading = null; });
 }
 
 function buildItemIndex(rows) {
@@ -388,13 +385,11 @@ function buildItemIndex(rows) {
     const c = String(r[0] || '').replace(/[^a-zA-Z0-9]/g, '');
     if (!c) continue;
     const k = c.toLowerCase();
-    if (!map[k]) map[k] = r; // first row wins, same as server
+    if (!map[k]) map[k] = r;
   }
   itemIndex = map;
 }
 
-// Returns an item object shaped exactly like the server's getItemByBarcode
-// result, or null if this code isn't in the local copy.
 function lookupLocal(code) {
   if (!itemIndex) return null;
 
@@ -447,6 +442,63 @@ function lookupLocal(code) {
   return null;
 }
 
+/* ---------------------------------------------------------------------------
+   INSTANT SOUNDS
+   Same beep files as before, but pre-loaded into memory and played through
+   Web Audio (no delay). Falls back to the <audio> tags if that isn't
+   possible on this phone.
+--------------------------------------------------------------------------- */
+let audioCtx = null;
+const soundBuffers = {};
+
+function initSounds() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    audioCtx = new Ctx();
+  } catch (e) { audioCtx = null; return; }
+
+  ['beepSuccess', 'beepError'].forEach(function (id) {
+    const el = document.getElementById(id);
+    const src = el && el.querySelector('source') ? el.querySelector('source').src : '';
+    if (!src) return;
+    fetch(src)
+      .then(function (r) { if (!r.ok) throw new Error('fetch'); return r.arrayBuffer(); })
+      .then(function (buf) {
+        return new Promise(function (res, rej) { audioCtx.decodeAudioData(buf, res, rej); });
+      })
+      .then(function (decoded) { soundBuffers[id] = decoded; })
+      .catch(function () { /* fallback to <audio> */ });
+  });
+
+  // Browsers only allow sound after the first tap/key — unlock on it.
+  const unlock = function () {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function () {});
+  };
+  document.addEventListener('pointerdown', unlock, { passive: true });
+  document.addEventListener('keydown', unlock);
+}
+
+function playSound(id) {
+  if (audioCtx && soundBuffers[id] && audioCtx.state === 'running') {
+    try {
+      const s = audioCtx.createBufferSource();
+      s.buffer = soundBuffers[id];
+      s.connect(audioCtx.destination);
+      s.start(0);
+      return;
+    } catch (e) { /* fall through */ }
+  }
+  const audio = document.getElementById(id);
+  if (audio) {
+    audio.currentTime = 0;
+    audio.play().catch(function () {});
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   BRANCH
+--------------------------------------------------------------------------- */
 function showBranchPicker() {
   const overlay = document.getElementById('branchPickerOverlay');
   const list = document.getElementById('branchChoiceList');
@@ -482,12 +534,20 @@ function beginForBranch(id) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   CAMERA (faster decoding)
+--------------------------------------------------------------------------- */
 function startCamera() {
   html5QrCode = new Html5Qrcode('qrReader');
 
+  // Phones with the built-in barcode detector (most Android/Chrome) can
+  // handle more frames per second without heating up.
+  const hasNativeDetector = ('BarcodeDetector' in window);
+
   const config = {
-    fps: 20,
+    fps: hasNativeDetector ? 30 : 20,
     qrbox: { width: 250, height: 140 },
+    disableFlip: true, // barcodes are never mirrored — skips a 2nd decode per frame
     experimentalFeatures: {
       useBarCodeDetectorIfSupported: true
     },
@@ -509,11 +569,19 @@ function startCamera() {
     function onFail() {}
   ).then(function () {
     setBanner('Point camera at a barcode...', '');
+    // Continuous autofocus so small barcodes lock quicker (ignored where
+    // the phone doesn't support it).
+    try {
+      html5QrCode.applyVideoConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(function () {});
+    } catch (e) { /* not supported */ }
   }).catch(function (err) {
     setBanner('Camera error: ' + err, 'err');
   });
 }
 
+/* ---------------------------------------------------------------------------
+   SCAN HANDLING
+--------------------------------------------------------------------------- */
 function processScan(decodedText) {
   if (!BRANCH_ID) return;
 
@@ -525,15 +593,15 @@ function processScan(decodedText) {
   lastCode = rawCode;
   lastCodeTime = now;
 
-  // FAST PATH — identify on the phone, no network wait.
+  // FAST PATH — identify on the phone.
   const localItem = lookupLocal(rawCode);
   if (localItem) {
     handleFoundItem(localItem);
     return;
   }
 
-  // SLOW PATH — not in the local copy (list still loading, or a brand-new
-  // item) → ask the server, same as before.
+  // Not found locally → queue (waits for the item list if it is still
+  // downloading, otherwise asks the server).
   scanQueue.push(rawCode);
   setBanner('Queued: ' + rawCode + (scanQueue.length > 1 ? ' (' + scanQueue.length + ' waiting)' : ''), '');
   runQueue();
@@ -547,34 +615,48 @@ function runQueue() {
   const code = scanQueue.shift();
   setBanner('Looking up ' + code + '...', '');
 
-  apiGet({ action: 'getItemByBarcode', code: code, branch: BRANCH_ID })
-    .then(function (result) {
-      if (!result.found) {
-        playSound('beepError');
-        setBanner('❌ Not found: ' + code, 'err');
+  // First-time open on a phone: the item list is usually only a moment
+  // away, so wait for it rather than making a slower server call.
+  const waitForIndex = (!itemIndex && itemIndexLoading) ? itemIndexLoading : Promise.resolve();
+
+  waitForIndex
+    .then(function () {
+      const local = lookupLocal(code);
+      if (local) {
+        handleFoundItem(local);
         return;
       }
-      handleFoundItem(result.item);
+      return apiGet({ action: 'getItemByBarcode', code: code, branch: BRANCH_ID })
+        .then(function (result) {
+          if (!result.found) {
+            playSound('beepError');
+            setBanner('❌ Not found: ' + code, 'err');
+            return;
+          }
+          handleFoundItem(result.item);
+        });
     })
-    .catch(function (err) {
+    .catch(function () {
       playSound('beepError');
       setBanner('Lookup error — check connection.', 'err');
     })
-    .finally(function () {
+    .then(function () {
       queueRunning = false;
       if (scanQueue.length > 0) runQueue();
     });
 }
 
-// Adds an identified item to the list (shared by the fast local path and
-// the server fallback — behaviour is identical to before).
 function handleFoundItem(item) {
   const displayName = item.printName || item.productName;
   const isWeightItem = !!item.isWeightItem;
 
+  // Beep + banner FIRST so the operator gets instant feedback, then
+  // update the list.
   if (isWeightItem) {
-    // Each weighed packet is its own line — never merge two different
-    // weighings of the same sweet.
+    const amountText = item.computedAmount ? ('  ₹' + item.computedAmount) : '';
+    playSound('beepSuccess');
+    setBanner('✅ ' + displayName + '  —  ' + item.weightKg.toFixed(3) + ' kg' + amountText, 'ok');
+
     scannedItems.push({
       barcodeCode: item.userDefinedCode,
       itemName: displayName,
@@ -584,15 +666,13 @@ function handleFoundItem(item) {
       weightGrams: item.weightGrams,
       computedAmount: item.computedAmount
     });
-    renderList();
-
-    const amountText = item.computedAmount ? ('  ₹' + item.computedAmount) : '';
-    playSound('beepSuccess');
-    setBanner('✅ ' + displayName + '  —  ' + item.weightKg.toFixed(3) + ' kg' + amountText, 'ok');
+    addRowForIndex(scannedItems.length - 1);
     return;
   }
 
-  // Normal (non-weight) item — repeat scans bump the count by 1.
+  playSound('beepSuccess');
+  setBanner('✅ ' + displayName + (item.stockUnit ? ' (' + item.stockUnit + ')' : ''), 'ok');
+
   const existing = scannedItems.find(function (e) {
     return !e.isWeightItem && e.barcodeCode.toLowerCase() === item.userDefinedCode.toLowerCase();
   });
@@ -607,11 +687,8 @@ function handleFoundItem(item) {
       countedQty: 1,
       isWeightItem: false
     });
-    renderList();
+    addRowForIndex(scannedItems.length - 1);
   }
-
-  playSound('beepSuccess');
-  setBanner('✅ ' + displayName + (item.stockUnit ? ' (' + item.stockUnit + ')' : ''), 'ok');
 }
 
 function wireBluetoothScanner() {
@@ -649,42 +726,59 @@ function formatQty(entry) {
   return entry.isWeightItem ? entry.countedQty.toFixed(3) : String(entry.countedQty);
 }
 
-function renderList() {
-  const body = document.getElementById('scanTableBody');
+/* ---------------------------------------------------------------------------
+   LIST RENDERING
+   New scans add ONE row at the top instead of redrawing the whole table.
+   (Full redraw only happens on remove, same look as before.)
+--------------------------------------------------------------------------- */
+function rowHtml(entry, idx) {
+  const step = entry.isWeightItem ? WEIGHT_QTY_STEP_KG : 1;
+  return (
+    '<tr id="row-item-' + idx + '">' +
+      '<td>' + escapeHtml(entry.itemName) +
+        (entry.isWeightItem ? '<span class="weight-tag">WEIGHED</span>' : '') +
+      '</td>' +
+      '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
+      '<td>' +
+        '<span class="qty-adjust">' +
+          '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + (-step) + ')"><i class="fa-solid fa-minus"></i></button>' +
+          '<span class="fw-semibold mx-2" id="qty-val-' + idx + '" style="user-select:none;">' + escapeHtml(formatQty(entry)) + '</span>' +
+          '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + step + ')"><i class="fa-solid fa-plus"></i></button>' +
+        '</span>' +
+      '</td>' +
+      '<td><button type="button" tabindex="-1" class="remove-btn" onpointerdown="fastRemoveItem(event, ' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
+    '</tr>'
+  );
+}
+
+function updateListCounts() {
   const badge = document.getElementById('countBadge');
   const submitBtn = document.getElementById('finalSubmitBtn');
-
   badge.textContent = scannedItems.length + ' item' + (scannedItems.length === 1 ? '' : 's');
   submitBtn.disabled = scannedItems.length === 0;
+}
+
+function addRowForIndex(idx) {
+  const body = document.getElementById('scanTableBody');
+  if (scannedItems.length === 1) body.innerHTML = ''; // clear the empty-state row
+  body.insertAdjacentHTML('afterbegin', rowHtml(scannedItems[idx], idx));
+  updateListCounts();
+}
+
+function renderList() {
+  const body = document.getElementById('scanTableBody');
+  updateListCounts();
 
   if (scannedItems.length === 0) {
     body.innerHTML = '<tr><td colspan="4" class="empty-list">Point the camera at a barcode to start scanning...</td></tr>';
     return;
   }
 
-  const reversed = scannedItems.slice().reverse();
-  const originalIndexOf = function (entry) { return scannedItems.indexOf(entry); };
-
-  body.innerHTML = reversed.map(function (entry) {
-    const idx = originalIndexOf(entry);
-    const step = entry.isWeightItem ? WEIGHT_QTY_STEP_KG : 1;
-    return (
-      '<tr id="row-item-' + idx + '">' +
-        '<td>' + escapeHtml(entry.itemName) +
-          (entry.isWeightItem ? '<span class="weight-tag">WEIGHED</span>' : '') +
-        '</td>' +
-        '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
-        '<td>' +
-          '<span class="qty-adjust">' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + (-step) + ')"><i class="fa-solid fa-minus"></i></button>' +
-            '<span class="fw-semibold mx-2" id="qty-val-' + idx + '" style="user-select:none;">' + escapeHtml(formatQty(entry)) + '</span>' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + step + ')"><i class="fa-solid fa-plus"></i></button>' +
-          '</span>' +
-        '</td>' +
-        '<td><button type="button" tabindex="-1" class="remove-btn" onpointerdown="fastRemoveItem(event, ' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
-      '</tr>'
-    );
-  }).join('');
+  let html = '';
+  for (let i = scannedItems.length - 1; i >= 0; i--) {
+    html += rowHtml(scannedItems[i], i);
+  }
+  body.innerHTML = html;
 }
 
 function fastAdjustQty(e, index, delta) {
@@ -728,6 +822,9 @@ function removeItem(index) {
   renderList();
 }
 
+/* ---------------------------------------------------------------------------
+   SUBMIT
+--------------------------------------------------------------------------- */
 function finalSubmit() {
   if (scannedItems.length === 0) return;
 
@@ -766,6 +863,9 @@ function finalSubmit() {
     });
 }
 
+/* ---------------------------------------------------------------------------
+   API
+--------------------------------------------------------------------------- */
 function apiGet(params) {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
     return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
@@ -793,14 +893,6 @@ function apiPost(bodyObj) {
       try { return JSON.parse(text); }
       catch (e) { throw new Error('Invalid API response — check deployment access is "Anyone".'); }
     });
-}
-
-function playSound(id) {
-  const audio = document.getElementById(id);
-  if (audio) {
-    audio.currentTime = 0;
-    audio.play().catch(function () {});
-  }
 }
 
 function escapeHtml(str) {
