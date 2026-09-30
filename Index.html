@@ -1,697 +1,1052 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Raghuvir Sweets And Bakers | Stock Scan</title>
+/**
+ * ============================================================================
+ *  RAGHUVIR SWEETS AND BAKERS - STOCK TAKING DASHBOARD (Multi-Branch)
+ *  Backend: Code.gs
+ *
+ *  WEIGHT-EMBEDDED BARCODES (Mithai / Sweets sold by weight)
+ *  ------------------------------------------------------------------------
+ *  Some barcodes encode BOTH the item code AND the weighed quantity, e.g.
+ *
+ *        805700750
+ *          └┬─┘└┬──┘
+ *       itemCode  weight(grams)
+ *
+ *    8057   -> looked up in Item_Master's User_Defined_Code column
+ *    00750  -> weight in GRAMS -> 750g -> 0.750 kg
+ *
+ *  When a scanned code is a pure 9-digit number and does NOT already match
+ *  a full barcode in Item_Master, the script automatically splits it into
+ *  a 4-digit item code + 5-digit weight (grams) and looks up the item by
+ *  that shorter code instead. The counted quantity for that scan becomes
+ *  the decoded weight in kg (e.g. 0.750), not "1 piece".
+ *
+ *  If your weighing scale prints a different number of digits for the
+ *  item code or the weight, change WEIGHT_BARCODE_ITEM_CODE_LEN /
+ *  WEIGHT_BARCODE_WEIGHT_LEN below (and the same two constants at the top
+ *  of Index.html's script) — nothing else needs to change.
+ *
+ *  SPEED NOTES (scan identification)
+ *  ------------------------------------------------------------------------
+ *  1. New action=getItemIndex returns a compact list of ALL items in one
+ *     call. Index.html downloads it once, keeps a copy on the phone, and
+ *     identifies scanned products INSTANTLY on the device — no server
+ *     round-trip per scan. The server lookup is only used as a fallback
+ *     (e.g. an item added to Item_Master after the page was opened).
+ *  2. getItemByBarcode no longer searches the whole Stock_Logs sheet on
+ *     every scan (lastCountedStock was never shown anywhere). Pass
+ *     withLastCount=1 if you ever need it again.
+ *  3. Batch submit, Admin summary and Reassign Depts now read Item_Master
+ *     ONCE per request into memory instead of one TextFinder search per
+ *     row.
+ * ============================================================================
+ */
 
-<link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+const SPREADSHEET_ID    = '1JwDAb5g8K06CwiAyNJ1tusSJwyiV85kB1f73GmNDJf8';
+const SHEET_ITEM_MASTER = 'Item_Master';
+const TXN_ID_START      = 1001;
+const TXN_TYPE_STOCK_COUNT = 'Stock Count';
 
-<style>
-  :root{
-    --brand-crimson:#a5192a;
-    --brand-crimson-dark:#7d1220;
-    --brand-orange:#f5871f;
-    --brand-orange-light:#fff3e6;
-    --bg-soft:#faf7f5;
-    --ink:#2b2320;
-  }
-  * { box-sizing: border-box; }
-  body{
-    background:var(--bg-soft);
-    color:var(--ink);
-    font-family:'Segoe UI', Roboto, Arial, sans-serif;
-    padding-bottom:90px;
-    touch-action: manipulation;
-  }
+const BRANCHES = {
+  'RAMMANDIR':   { id: 'RAMMANDIR',   label: 'Ram Mandir',  logSheet: 'Stock_Logs_Branch1' },
+  'VISHRAMBAGH': { id: 'VISHRAMBAGH', label: 'Vishrambagh', logSheet: 'Stock_Logs_Branch2' }
+};
+const DEFAULT_BRANCH = 'RAMMANDIR';
 
-  .app-header{
-    background:linear-gradient(90deg, var(--brand-crimson) 0%, var(--brand-crimson-dark) 100%);
-    color:#fff;
-    padding:.6rem 1rem;
-    display:flex;
-    align-items:center;
-    gap:.6rem;
-  }
-  .app-header .brand-logo{
-    height:38px; width:38px; object-fit:contain; border-radius:8px; background:#fff; padding:2px;
-  }
-  .app-header .brand-name{ font-weight:700; font-size:1rem; line-height:1.1; }
-  .branch-pill{
-    margin-left:auto;
-    background:rgba(255,255,255,.18);
-    border:1px solid rgba(255,255,255,.35);
-    font-size:.75rem; font-weight:700;
-    padding:.25rem .65rem; border-radius:999px;
-  }
+// ----------------------------------------------------------------------------
+// WEIGHT-EMBEDDED BARCODE CONFIG
+// ----------------------------------------------------------------------------
+const WEIGHT_BARCODE_ITEM_CODE_LEN = 4;  // digits 1-4   -> Item_Master code
+const WEIGHT_BARCODE_WEIGHT_LEN    = 5;  // digits 5-9   -> weight in grams
+const WEIGHT_BARCODE_TOTAL_LEN     = WEIGHT_BARCODE_ITEM_CODE_LEN + WEIGHT_BARCODE_WEIGHT_LEN;
 
-  .config-banner{
-    background:#fff3cd; border-bottom:1px solid #ffe69c; color:#664d03;
-    padding:.5rem 1rem; font-size:.8rem; text-align:center; display:none;
-  }
+/**
+ * If `code` is a pure-digit string of exactly WEIGHT_BARCODE_TOTAL_LEN
+ * digits, splits it into { itemCode, weightGrams, weightKg }. Otherwise
+ * returns null (meaning: treat it as a normal, non-weight barcode).
+ */
+function _parseWeightBarcode_(code) {
+  if (!/^\d+$/.test(code)) return null;
+  if (code.length !== WEIGHT_BARCODE_TOTAL_LEN) return null;
 
-  .branch-picker-overlay{
-    position:fixed; inset:0; z-index:2000;
-    background:rgba(43,35,32,.55);
-    display:flex; align-items:center; justify-content:center;
-    padding:1rem;
-  }
-  .branch-picker-card{
-    background:#fff; border-radius:16px; padding:1.4rem 1.2rem;
-    max-width:360px; width:100%;
-    box-shadow:0 10px 30px rgba(0,0,0,.25);
-  }
-  .branch-picker-card h5{
-    color:var(--brand-crimson-dark); font-weight:800; margin-bottom:.9rem; text-align:center;
-  }
-  .branch-choice-btn{
-    display:block; width:100%; text-align:left;
-    background:var(--brand-orange-light);
-    border:1px solid #f0d3b8;
-    color:var(--brand-crimson-dark);
-    font-weight:700;
-    padding:.65rem .9rem;
-    border-radius:10px;
-    margin-bottom:.55rem;
-  }
-  .branch-choice-btn:hover{ background:#ffe6c2; }
+  const itemCode = code.substring(0, WEIGHT_BARCODE_ITEM_CODE_LEN);
+  const weightPart = code.substring(WEIGHT_BARCODE_ITEM_CODE_LEN);
+  const weightGrams = parseInt(weightPart, 10);
 
-  .camera-wrap{
-    max-width:340px;
-    margin:0.75rem auto 0;
-    padding:0 .75rem;
-  }
-  .camera-box{
-    background:#000;
-    border-radius:14px;
-    overflow:hidden;
-    position:relative;
-    box-shadow:0 4px 16px rgba(165,25,42,.15);
-  }
-  #qrReader{ width:100%; }
-  #qrReader video{ border-radius:14px; display:block; }
-  .scan-banner{
-    position:absolute; left:0; right:0; bottom:0;
-    background:rgba(0,0,0,.75);
-    color:#fff;
-    padding:.65rem .9rem;
-    font-size:.9rem;
-    font-weight:600;
-    text-align:center;
-    min-height:2.6rem;
-  }
-  .scan-banner.ok{ background:rgba(31,160,74,.9); }
-  .scan-banner.err{ background:rgba(220,53,69,.9); }
-
-  .list-wrap{
-    max-width:900px;
-    margin:.9rem auto 0;
-    padding:0 .75rem;
-  }
-  .list-card{
-    background:#fff;
-    border-radius:14px;
-    border:1px solid #eee0d8;
-    box-shadow:0 2px 10px rgba(165,25,42,.06);
-  }
-  .list-header{
-    padding:.7rem .9rem;
-    border-bottom:1px solid #f1e5dc;
-    font-weight:700;
-    font-size:.9rem;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-  }
-  .count-badge{
-    background:var(--brand-orange-light);
-    color:var(--brand-crimson-dark);
-    border:1px solid #f0d3b8;
-    font-weight:800;
-    font-size:.78rem;
-    padding:.2rem .6rem;
-    border-radius:999px;
-  }
-  .scan-table{ margin-bottom:0; width:100%; }
-  .scan-table thead th{
-    background:#f6ede6;
-    color:var(--brand-crimson-dark);
-    font-size:.75rem;
-    text-transform:uppercase;
-    letter-spacing:.4px;
-    border:none;
-    padding:.65rem .9rem;
-  }
-  .scan-table tbody td{
-    font-size:.95rem;
-    vertical-align:middle;
-    padding:.65rem .9rem;
-  }
-  .weight-tag{
-    display:inline-block;
-    background:var(--brand-orange-light);
-    color:var(--brand-crimson-dark);
-    border:1px solid #f0d3b8;
-    font-size:.68rem;
-    font-weight:800;
-    padding:.05rem .4rem;
-    border-radius:6px;
-    margin-left:.35rem;
-    vertical-align:middle;
-  }
-  .qty-adjust{ 
-    display:inline-flex; 
-    align-items:center; 
-    gap:.35rem; 
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  .qty-btn{
-    width:38px; height:38px; line-height:1;
-    border:1px solid var(--brand-orange);
-    background:var(--brand-orange-light);
-    color:var(--brand-crimson-dark);
-    border-radius:8px; font-size:1.1rem;
-    display:inline-flex; align-items:center; justify-content:center;
-    user-select:none;
-    -webkit-user-select:none;
-    touch-action: manipulation;
-    outline: none;
-    cursor: pointer;
-  }
-  .qty-btn:active{
-    background:var(--brand-orange);
-    color:#fff;
-  }
-  .remove-btn{ 
-    border:none; 
-    background:none; 
-    color:#dc3545; 
-    font-size:1.1rem; 
-    padding:.4rem .6rem; 
-    user-select:none;
-    -webkit-user-select:none;
-    touch-action: manipulation;
-    outline: none;
-    cursor: pointer;
-  }
-  .empty-list{ text-align:center; color:#a99184; padding:1.6rem; font-size:.85rem; }
-
-  .bottom-bar{
-    position:fixed;
-    left:0; right:0; bottom:0;
-    background:#fff;
-    border-top:1px solid #eee0d8;
-    box-shadow:0 -2px 12px rgba(0,0,0,.08);
-    padding:.6rem .9rem;
-    z-index:1030;
-  }
-  .bottom-bar-inner{
-    max-width:900px;
-    margin:0 auto;
-  }
-  .btn-final-submit{
-    background:linear-gradient(90deg, var(--brand-crimson), var(--brand-crimson-dark));
-    border:none;
-    color:#fff;
-    font-weight:700;
-    font-size:.85rem;
-    padding:.55rem 1rem;
-    border-radius:8px;
-    white-space:nowrap;
-  }
-  .btn-final-submit:disabled{ opacity:.5; }
-</style>
-</head>
-<body>
-
-<div class="config-banner" id="configBanner">
-  <i class="fa-solid fa-triangle-exclamation"></i>
-  APPS_SCRIPT_URL is not configured properly.
-</div>
-
-<div class="branch-picker-overlay" id="branchPickerOverlay" style="display:none;">
-  <div class="branch-picker-card">
-    <h5><i class="fa-solid fa-store"></i> Select Your Branch</h5>
-    <div id="branchChoiceList"></div>
-  </div>
-</div>
-
-<input type="text" id="btScannerInput" autocomplete="off" inputmode="none" readonly style="position:fixed; top:-1000px; left:-1000px; opacity:0;">
-
-<div class="app-header">
-  <img class="brand-logo" src="https://lh3.googleusercontent.com/d/18aiuiSN9uj-mJtOkGB1rNt4GP6yUbvuO" alt="Logo" onerror="this.style.display='none'">
-  <span class="brand-name">Raghuvir Stock Scan</span>
-  <span class="branch-pill" id="branchPill"><i class="fa-solid fa-store"></i> --</span>
-</div>
-
-<div class="camera-wrap">
-  <div class="camera-box">
-    <div id="qrReader"></div>
-    <div class="scan-banner" id="scanBanner">Starting camera...</div>
-  </div>
-</div>
-
-<div class="list-wrap">
-  <div class="list-card">
-    <div class="list-header">
-      <span><i class="fa-solid fa-list-ol"></i> Scanned Items</span>
-      <span class="count-badge" id="countBadge">0 items</span>
-    </div>
-    <div class="table-responsive">
-      <table class="table scan-table">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Unit</th>
-            <th>Qty</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="scanTableBody">
-          <tr><td colspan="4" class="empty-list">Point the camera at a barcode to start scanning...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<div class="bottom-bar">
-  <div class="bottom-bar-inner">
-    <button class="btn-final-submit w-100" id="finalSubmitBtn" type="button" disabled tabindex="-1">
-      <i class="fa-solid fa-check-double"></i> Submit Scanned Items
-    </button>
-  </div>
-</div>
-
-<audio id="beepSuccess" preload="auto">
-  <source src="https://actions.google.com/sounds/v1/cartoon/pop.ogg" type="audio/ogg">
-</audio>
-<audio id="beepError" preload="auto">
-  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
-</audio>
-
-<script>
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyo-vJOoWzfd7PPKIaOCdqDn3W3GUYXQsFjESVl3Iqnh4uuOXF6j903cTwj2nmdlpkP_g/exec';
-
-const BRANCH_OPTIONS = [
-  { id: 'RAMMANDIR',   label: 'Ram Mandir' },
-  { id: 'VISHRAMBAGH', label: 'Vishrambagh' }
-];
-
-/* ============================================================================
-   WEIGHT ITEM QTY STEP
-   For weighed items (decoded from a weight-embedded barcode) the +/-
-   buttons adjust by this many KG per tap, since counts are fractional
-   (e.g. 0.750 kg) rather than whole pieces.
-============================================================================ */
-const WEIGHT_QTY_STEP_KG = 0.050;
-
-const urlParams = new URLSearchParams(window.location.search);
-let BRANCH_ID = (urlParams.get('branch') || '').toUpperCase();
-let BRANCH_LABEL = '';
-
-let scannedItems = [];
-let html5QrCode = null;
-let cameraStarted = false;
-let lastCode = '';
-let lastCodeTime = 0;
-const SCAN_COOLDOWN_MS = 400;
-let scanQueue = [];
-let queueRunning = false;
-
-document.addEventListener('DOMContentLoaded', function () {
-  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
-    document.getElementById('configBanner').style.display = 'block';
-  }
-
-  const knownIds = BRANCH_OPTIONS.map(function (b) { return b.id; });
-
-  if (BRANCH_ID && knownIds.indexOf(BRANCH_ID) !== -1) {
-    beginForBranch(BRANCH_ID);
-  } else {
-    showBranchPicker();
-  }
-});
-
-function showBranchPicker() {
-  const overlay = document.getElementById('branchPickerOverlay');
-  const list = document.getElementById('branchChoiceList');
-  list.innerHTML = BRANCH_OPTIONS.map(function (b) {
-    return '<button type="button" tabindex="-1" class="branch-choice-btn" onclick="chooseBranch(\'' + b.id + '\')">' +
-             '<i class="fa-solid fa-store"></i> ' + escapeHtml(b.label) +
-           '</button>';
-  }).join('');
-  overlay.style.display = 'flex';
-}
-
-function chooseBranch(id) {
-  const url = new URL(window.location.href);
-  url.searchParams.set('branch', id);
-  window.history.replaceState({}, '', url);
-
-  document.getElementById('branchPickerOverlay').style.display = 'none';
-  beginForBranch(id);
-}
-
-function beginForBranch(id) {
-  BRANCH_ID = id;
-  const match = BRANCH_OPTIONS.find(function (b) { return b.id === id; });
-  BRANCH_LABEL = match ? match.label : id;
-
-  document.getElementById('branchPill').innerHTML = '<i class="fa-solid fa-store"></i> ' + escapeHtml(BRANCH_LABEL);
-  document.getElementById('finalSubmitBtn').addEventListener('click', finalSubmit);
-
-  wireBluetoothScanner();
-  if (!cameraStarted) {
-    cameraStarted = true;
-    startCamera();
-  }
-}
-
-function startCamera() {
-  html5QrCode = new Html5Qrcode('qrReader');
-
-  const config = {
-    fps: 20,
-    qrbox: { width: 250, height: 140 },
-    experimentalFeatures: {
-      useBarCodeDetectorIfSupported: true
-    },
-    formatsToSupport: [
-      Html5QrcodeSupportedFormats.EAN_13,
-      Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.CODE_128,
-      Html5QrcodeSupportedFormats.CODE_39,
-      Html5QrcodeSupportedFormats.UPC_A,
-      Html5QrcodeSupportedFormats.UPC_E,
-      Html5QrcodeSupportedFormats.QR_CODE
-    ]
+  return {
+    itemCode: itemCode,
+    weightGrams: weightGrams,
+    weightKg: weightGrams / 1000
   };
+}
 
-  html5QrCode.start(
-    { facingMode: 'environment' },
-    config,
-    processScan,
-    function onFail() {}
-  ).then(function () {
-    setBanner('Point camera at a barcode...', '');
-  }).catch(function (err) {
-    setBanner('Camera error: ' + err, 'err');
+const IM_COL_FALLBACK = {
+  productName: 1,
+  printName: 2,
+  userDefinedCode: 3,
+  brand: 4,
+  subGroup: 5,
+  group: 6,
+  dept: 7,
+  stockUnit: 8,
+  saleRate: 9,
+  ingredients1: 10,
+  ingredients2: 11,
+  ingredients3: 12,
+  ingredients4: 13,
+  netWeight: 14,
+  bestBefore: 15,
+  perGramRate: 16
+};
+
+const IM_HEADER_ALIASES = {
+  productName:     ['product_name', 'productname', 'item_name', 'productnameprintnameuserdefinedcode'],
+  printName:       ['print_name', 'printname'],
+  userDefinedCode: ['user_defined_code', 'userdefinedcode', 'barcode', 'barcode_code', 'code', 'user_code'],
+  brand:           ['brand'],
+  subGroup:        ['sub_group', 'subgroup'],
+  group:           ['group'],
+  dept:            ['dept', 'department'],
+  stockUnit:       ['stock_unit', 'stockunit', 'unit'],
+  saleRate:        ['sale_rate', 'salerate', 'rate', 'price', 'mrp'],
+  ingredients1:    ['ingredients1', 'ingredient1'],
+  ingredients2:    ['ingredients2', 'ingredient2'],
+  ingredients3:    ['ingredients3', 'ingredient3'],
+  ingredients4:    ['ingredients4', 'ingredient4'],
+  netWeight:       ['net_weight', 'netweight', 'weight'],
+  bestBefore:      ['best_before', 'bestbefore', 'expiry', 'expiry_date'],
+  perGramRate:     ['per_gram_rate', 'pergramrate']
+};
+
+const SL_COL = {
+  TXN_ID: 1,
+  DATE_TIME: 2,
+  BARCODE_CODE: 3,
+  ITEM_NAME: 4,
+  DEPT: 5,
+  TXN_TYPE: 6,
+  ENTRY_QTY: 7,
+  FINAL_STOCK: 8,
+  OPERATOR_NAME: 9,
+  REMARKS: 10,
+  AMOUNT: 11
+};
+const SL_NUM_COLS = 11;
+
+function doGet(e) {
+  try {
+    const action = e && e.parameter ? e.parameter.action : '';
+    let result;
+
+    switch (action) {
+      case 'getItemIndex':
+        // Returned as a pre-built JSON string (possibly straight from
+        // cache) so it isn't parsed and re-stringified for nothing.
+        return ContentService
+          .createTextOutput(getItemIndexJson())
+          .setMimeType(ContentService.MimeType.JSON);
+      case 'getItemByBarcode':
+        result = getItemByBarcode(e.parameter.code, e.parameter.branch, e.parameter.withLastCount === '1');
+        break;
+      case 'getRecentLogs':
+        result = getRecentStockLogs(e.parameter.branch);
+        break;
+      case 'getItemList':
+        result = getItemPickList();
+        break;
+      case 'getAvailableMonths':
+        result = getAvailableMonths();
+        break;
+      case 'getAdminSummary':
+        result = getAdminSummary(e.parameter.month, e.parameter.year, e.parameter.branch);
+        break;
+      case 'bumpItemCacheVersion':
+        result = bumpItemCacheVersion();
+        break;
+      case 'ping':
+        result = { ok: true, message: 'API is reachable.' };
+        break;
+      default:
+        result = { error: 'Unknown or missing action parameter.' };
+    }
+
+    return _jsonOutput_(result);
+  } catch (err) {
+    return _jsonOutput_({ error: err.message });
+  }
+}
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const action = body.action;
+    let result;
+
+    if (action === 'recordStockCountBatch') {
+      result = recordStockCountBatch(body.data);
+    } else if (action === 'addManualEntry') {
+      result = addManualEntry(body.data);
+    } else if (action === 'reassignDepartments') {
+      result = reassignDepartments();
+    } else {
+      result = { success: false, message: 'Unknown action.' };
+    }
+
+    return _jsonOutput_(result);
+  } catch (err) {
+    return _jsonOutput_({ success: false, message: err.message });
+  }
+}
+
+function _jsonOutput_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Spreadsheet handle is opened once per request and reused.
+let _ssMemo_ = null;
+function _ss_() {
+  if (!_ssMemo_) _ssMemo_ = SpreadsheetApp.openById(SPREADSHEET_ID);
+  return _ssMemo_;
+}
+
+function _sheet_(name) {
+  const sheet = _ss_().getSheetByName(name);
+  if (!sheet) throw new Error('Sheet not found: ' + name);
+  return sheet;
+}
+
+function _branchLogSheetName_(branchId) {
+  const b = BRANCHES[branchId] || BRANCHES[DEFAULT_BRANCH];
+  return b.logSheet;
+}
+
+function _normalizeCode_(code) {
+  let s = String(code || '').replace(/[\r\n\t\s]/g, '').trim();
+  // Ignore any symbols the scanner/printer might add around the actual
+  // code — #, $, *, -, etc. Only letters and digits are kept, so
+  // "#804200236" and "804200236" resolve to the exact same code.
+  s = s.replace(/[^a-zA-Z0-9]/g, '');
+  return s;
+}
+
+function _normalizeHeader_(h) {
+  return String(h || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function _buildHeaderMap_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < 1) return {};
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const map = {};
+  headers.forEach(function (h, idx) {
+    const key = _normalizeHeader_(h);
+    if (key) map[key] = idx + 1;
   });
+  return map;
 }
 
-function processScan(decodedText) {
-  if (!BRANCH_ID) return;
+function _resolveItemMasterColumns_(sheet) {
+  const headerMap = _buildHeaderMap_(sheet);
+  const resolved = {};
 
-  // Ignore any symbols the scanner might include around the code (#, $,
-  // etc.) — keep only letters/digits, same rule as the backend.
-  const rawCode = String(decodedText || '').trim().replace(/[^a-zA-Z0-9]/g, '');
-  if (!rawCode) return;
+  Object.keys(IM_HEADER_ALIASES).forEach(function (field) {
+    const aliases = IM_HEADER_ALIASES[field];
+    let found = null;
+    for (let i = 0; i < aliases.length; i++) {
+      if (headerMap[aliases[i]]) {
+        found = headerMap[aliases[i]];
+        break;
+      }
+    }
+    resolved[field] = found || IM_COL_FALLBACK[field];
+  });
 
-  const now = Date.now();
-  if (rawCode === lastCode && (now - lastCodeTime) < SCAN_COOLDOWN_MS) return;
-  lastCode = rawCode;
-  lastCodeTime = now;
-
-  scanQueue.push(rawCode);
-  setBanner('Queued: ' + rawCode + (scanQueue.length > 1 ? ' (' + scanQueue.length + ' waiting)' : ''), '');
-  runQueue();
+  return resolved;
 }
 
-function runQueue() {
-  if (queueRunning) return;
-  if (scanQueue.length === 0) return;
+// ----------------------------------------------------------------------------
+// FAST PER-BARCODE LOOKUP (server-side fallback)
+// ----------------------------------------------------------------------------
+const ITEM_CACHE_PREFIX = 'item_v4_';
+const ITEM_CACHE_SECONDS = 600; // 10 min — plenty for a stock-count session
 
-  queueRunning = true;
-  const code = scanQueue.shift();
-  setBanner('Looking up ' + code + '...', '');
+// Read once per request instead of hitting PropertiesService on every
+// cache-key build (it used to be read several times per scan).
+let _cacheVersionMemo_ = null;
+function _cacheVersion_() {
+  if (_cacheVersionMemo_ !== null) return _cacheVersionMemo_;
+  const props = PropertiesService.getScriptProperties();
+  _cacheVersionMemo_ = props.getProperty('ITEM_CACHE_VERSION') || '1';
+  return _cacheVersionMemo_;
+}
 
-  apiGet({ action: 'getItemByBarcode', code: code, branch: BRANCH_ID })
-    .then(function (result) {
-      if (!result.found) {
-        playSound('beepError');
-        setBanner('❌ Not found: ' + code, 'err');
-        return;
-      }
+/**
+ * Bumps the cache version so every previously-cached item lookup (and the
+ * cached full item index) is treated as stale immediately — used after
+ * editing rates in Item_Master.
+ * Exposed to the Admin Dashboard as the "Refresh Rates" button
+ * (action=bumpItemCacheVersion), and can also be run manually here.
+ */
+function bumpItemCacheVersion() {
+  const props = PropertiesService.getScriptProperties();
+  const current = parseInt(props.getProperty('ITEM_CACHE_VERSION') || '1', 10) || 1;
+  const next = String(current + 1);
+  props.setProperty('ITEM_CACHE_VERSION', next);
+  _cacheVersionMemo_ = next;
+  _itemMapMemo_ = null;
+  return { success: true, message: 'Item cache refreshed — latest rates will be used.' };
+}
 
-      const item = result.item;
-      const displayName = item.printName || item.productName;
-      const isWeightItem = !!item.isWeightItem;
+function _itemCacheKey_(code) {
+  return ITEM_CACHE_PREFIX + 'v' + _cacheVersion_() + '_' + code.toLowerCase();
+}
 
-      if (isWeightItem) {
-        // Each weighed packet is its own line — never merge two different
-        // weighings of the same sweet, since the weight (and therefore the
-        // counted quantity) is different every time.
-        scannedItems.push({
-          barcodeCode: item.userDefinedCode,
-          itemName: displayName,
-          alternateUnit: 'Kg',
-          countedQty: item.weightKg,
-          isWeightItem: true,
-          weightGrams: item.weightGrams,
-          computedAmount: item.computedAmount
-        });
-        renderList();
+function _getCachedItem_(code) {
+  const raw = CacheService.getScriptCache().get(_itemCacheKey_(code));
+  if (raw === null) return undefined; // not cached at all
+  try {
+    return JSON.parse(raw); // may itself be `null`, meaning "cached: not found"
+  } catch (e) {
+    return undefined;
+  }
+}
 
-        const amountText = item.computedAmount ? ('  ₹' + item.computedAmount) : '';
-        playSound('beepSuccess');
-        setBanner('✅ ' + displayName + '  —  ' + item.weightKg.toFixed(3) + ' kg' + amountText, 'ok');
-        return;
-      }
+function _setCachedItem_(code, recordOrNull) {
+  try {
+    CacheService.getScriptCache().put(_itemCacheKey_(code), JSON.stringify(recordOrNull), ITEM_CACHE_SECONDS);
+  } catch (e) {
+    // ignore — worst case this one lookup just isn't cached
+  }
+}
 
-      // Normal (non-weight) item — same behaviour as before: repeat scans
-      // of the same barcode just bump the count by 1.
-      const existing = scannedItems.find(function (e) {
-        return !e.isWeightItem && e.barcodeCode.toLowerCase() === item.userDefinedCode.toLowerCase();
+/**
+ * Run manually from the Apps Script editor after bulk-editing Item_Master
+ * if you need old cached items to refresh before their 10-minute expiry.
+ */
+function clearItemMasterCache() {
+  CacheService.getScriptCache().remove('item_master_index_v3');
+  bumpItemCacheVersion();
+}
+
+function _buildItemRecordFromRow_(row, cols, matchedCode) {
+  const productNameVal = String(row[cols.productName - 1] || '').trim();
+  const printNameVal = String(row[cols.printName - 1] || '').trim();
+  const resolvedName = printNameVal !== '' ? printNameVal : (productNameVal !== '' ? productNameVal : 'Unnamed Item');
+
+  return {
+    productName: productNameVal || resolvedName,
+    printName: resolvedName,
+    userDefinedCode: matchedCode,
+    brand: row[cols.brand - 1] || '',
+    subGroup: row[cols.subGroup - 1] || '',
+    group: row[cols.group - 1] || '',
+    dept: row[cols.dept - 1] || '',
+    stockUnit: row[cols.stockUnit - 1] || 'Pcs',
+    saleRate: row[cols.saleRate - 1] || 0,
+    perGramRate: row[cols.perGramRate - 1] || 0
+  };
+}
+
+// ----------------------------------------------------------------------------
+// IN-MEMORY ITEM MAP (one bulk read per request)
+// ----------------------------------------------------------------------------
+// Used whenever a request needs MANY lookups (batch submit, admin summary,
+// reassign depts, full item index). One getValues() of the sheet is far
+// faster than hundreds of separate TextFinder searches.
+let _itemMapMemo_ = null;
+
+function _loadItemMap_() {
+  if (_itemMapMemo_) return _itemMapMemo_;
+
+  const sheet = _sheet_(SHEET_ITEM_MASTER);
+  const lastRow = sheet.getLastRow();
+  const map = {};
+
+  if (lastRow >= 2) {
+    const cols = _resolveItemMasterColumns_(sheet);
+    const lastCol = sheet.getLastColumn();
+    const values = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    // Display values for the code column, so codes match exactly what
+    // TextFinder (and the scanner) sees — e.g. leading zeros kept.
+    const codeDisplay = sheet.getRange(2, cols.userDefinedCode, lastRow - 1, 1).getDisplayValues();
+
+    for (let i = 0; i < values.length; i++) {
+      const code = _normalizeCode_(codeDisplay[i][0]);
+      if (!code) continue;
+      const key = code.toLowerCase();
+      if (map[key]) continue; // first row wins, same as TextFinder.findNext()
+      map[key] = _buildItemRecordFromRow_(values[i], cols, code);
+    }
+  }
+
+  _itemMapMemo_ = map;
+  return map;
+}
+
+/**
+ * Finds ONE item by an exact User_Defined_Code match. If this request has
+ * already loaded the full item map, uses that (instant). Otherwise checks
+ * the per-item cache, then searches just the code column with TextFinder.
+ */
+function _findItemRecordByCode_(code) {
+  if (_itemMapMemo_) {
+    const rec = _itemMapMemo_[code.toLowerCase()];
+    return rec ? Object.assign({}, rec, { userDefinedCode: code }) : null;
+  }
+
+  const cached = _getCachedItem_(code);
+  if (cached !== undefined) return cached; // null here correctly means "known not found"
+
+  const sheet = _sheet_(SHEET_ITEM_MASTER);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    _setCachedItem_(code, null);
+    return null;
+  }
+
+  const cols = _resolveItemMasterColumns_(sheet);
+  const searchRange = sheet.getRange(2, cols.userDefinedCode, lastRow - 1, 1);
+  const finder = searchRange.createTextFinder(code).matchEntireCell(true).matchCase(false);
+  const match = finder.findNext();
+
+  if (!match) {
+    _setCachedItem_(code, null);
+    return null;
+  }
+
+  const rowNum = match.getRow();
+  const lastCol = sheet.getLastColumn();
+  const rowVals = sheet.getRange(rowNum, 1, 1, lastCol).getValues()[0];
+  const record = _buildItemRecordFromRow_(rowVals, cols, code);
+
+  _setCachedItem_(code, record);
+  return record;
+}
+
+// ----------------------------------------------------------------------------
+// FULL ITEM INDEX FOR THE SCANNER (action=getItemIndex)
+// ----------------------------------------------------------------------------
+// Compact rows: [code, printName, productName, dept, stockUnit, saleRate, perGramRate]
+// The JSON is cached in chunks (CacheService allows ~100KB per key) so
+// several phones opening the scanner don't each re-read the sheet.
+const INDEX_CACHE_PREFIX = 'itemidx_';
+const INDEX_CHUNK_CHARS = 24000; // safe under 100KB even for multi-byte names
+
+function _indexCacheBase_() {
+  return INDEX_CACHE_PREFIX + 'v' + _cacheVersion_();
+}
+
+function _getCachedIndexJson_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const base = _indexCacheBase_();
+    const n = parseInt(cache.get(base + '_n') || '', 10);
+    if (!n) return null;
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(base + '_' + i);
+    const parts = cache.getAll(keys);
+    let json = '';
+    for (let i = 0; i < n; i++) {
+      const p = parts[keys[i]];
+      if (p === undefined || p === null) return null;
+      json += p;
+    }
+    return json;
+  } catch (e) {
+    return null;
+  }
+}
+
+function _putCachedIndexJson_(json) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const base = _indexCacheBase_();
+    const chunks = {};
+    let n = 0;
+    for (let i = 0; i < json.length; i += INDEX_CHUNK_CHARS) {
+      chunks[base + '_' + n] = json.substring(i, i + INDEX_CHUNK_CHARS);
+      n++;
+    }
+    cache.putAll(chunks, ITEM_CACHE_SECONDS);
+    cache.put(base + '_n', String(n), ITEM_CACHE_SECONDS); // written last = "complete"
+  } catch (e) {
+    // too big or cache error — fine, it'll just be rebuilt next time
+  }
+}
+
+function getItemIndexJson() {
+  const cached = _getCachedIndexJson_();
+  if (cached) return cached;
+
+  const map = _loadItemMap_();
+  const rows = Object.keys(map).map(function (k) {
+    const r = map[k];
+    return [
+      r.userDefinedCode,
+      r.printName,
+      r.productName,
+      String(r.dept || ''),
+      String(r.stockUnit || 'Pcs'),
+      Number(r.saleRate) || 0,
+      Number(r.perGramRate) || 0
+    ];
+  });
+
+  const json = JSON.stringify({
+    version: _cacheVersion_(),
+    count: rows.length,
+    items: rows
+  });
+  _putCachedIndexJson_(json);
+  return json;
+}
+
+/**
+ * Looks up an item by barcode. Tries a DIRECT match against Item_Master
+ * first (normal, non-weight items). If that fails AND the code is a pure
+ * 9-digit number, tries decoding it as a weight-embedded barcode
+ * (itemCode + weightGrams) and looks up the shorter itemCode instead.
+ *
+ * lastCountedStock is only computed when withLastCount is true — it needs
+ * a search of the whole Stock_Logs sheet and nothing on screen uses it.
+ */
+function getItemByBarcode(barcodeValue, branchId, withLastCount) {
+  try {
+    const code = _normalizeCode_(barcodeValue);
+    if (!code) {
+      return { found: false, item: null, message: 'Empty barcode value.' };
+    }
+
+    const bId = BRANCHES[branchId] ? branchId : DEFAULT_BRANCH;
+
+    // 1) Try as a normal, full barcode first.
+    const directHit = _findItemRecordByCode_(code);
+    if (directHit) {
+      const lastCount = withLastCount ? _getLastCountedStock_(code, bId) : null;
+      const item = Object.assign({}, directHit, {
+        lastCountedStock: lastCount,
+        isWeightItem: false,
+        weightKg: null,
+        weightGrams: null,
+        computedAmount: null
       });
-      if (existing) {
-        existing.countedQty += 1;
-        updateQtyDisplay(scannedItems.indexOf(existing));
-      } else {
-        scannedItems.push({
-          barcodeCode: item.userDefinedCode,
-          itemName: displayName,
-          alternateUnit: item.stockUnit,
-          countedQty: 1,
-          isWeightItem: false
+      return { found: true, item: item, message: 'Item found.' };
+    }
+
+    // 2) Not found directly — try decoding as a weight-embedded barcode
+    //    (Mithai/Sweets): itemCode + weight(grams).
+    const decoded = _parseWeightBarcode_(code);
+    if (decoded) {
+      const weightHit = _findItemRecordByCode_(decoded.itemCode);
+      if (weightHit) {
+        const lastCount = withLastCount ? _getLastCountedStock_(code, bId) : null;
+
+        // Prefer Per_Gram_Rate for the value of this specific weighed
+        // packet; fall back to Sale_Rate treated as a per-kg rate.
+        let computedAmount = null;
+        const perGramRate = Number(weightHit.perGramRate) || 0;
+        const saleRate = Number(weightHit.saleRate) || 0;
+        if (perGramRate > 0) {
+          computedAmount = Math.round(perGramRate * decoded.weightGrams * 100) / 100;
+        } else if (saleRate > 0) {
+          computedAmount = Math.round(saleRate * decoded.weightKg * 100) / 100;
+        }
+
+        const item = Object.assign({}, weightHit, {
+          userDefinedCode: code,           // keep the FULL scanned code for logging
+          lastCountedStock: lastCount,
+          isWeightItem: true,
+          weightGrams: decoded.weightGrams,
+          weightKg: decoded.weightKg,
+          computedAmount: computedAmount,
+          stockUnit: 'Kg'
         });
-        renderList();
+        return { found: true, item: item, message: 'Weight item decoded (' + decoded.weightKg + ' kg).' };
       }
+      return {
+        found: false,
+        item: null,
+        message: 'Weight barcode decoded (item code ' + decoded.itemCode + ') but that code is not in Item_Master.'
+      };
+    }
 
-      playSound('beepSuccess');
-      setBanner('✅ ' + displayName + (item.stockUnit ? ' (' + item.stockUnit + ')' : ''), 'ok');
-    })
-    .catch(function (err) {
-      playSound('beepError');
-      setBanner('Lookup error — check connection.', 'err');
-    })
-    .finally(function () {
-      queueRunning = false;
-      if (scanQueue.length > 0) runQueue();
+    return { found: false, item: null, message: 'Barcode (' + code + ') not found in Item_Master.' };
+  } catch (err) {
+    return { found: false, item: null, message: 'Error: ' + err.message };
+  }
+}
+
+function _getLastCountedStock_(code, branchId) {
+  const sheetName = _branchLogSheetName_(branchId);
+  const sheet = _sheet_(sheetName);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+
+  const searchRange = sheet.getRange(2, SL_COL.BARCODE_CODE, lastRow - 1, 1);
+  const finder = searchRange.createTextFinder(code).matchEntireCell(true).matchCase(false);
+  const matches = finder.findAll();
+  if (matches.length === 0) return null;
+
+  const lastMatchRow = matches[matches.length - 1].getRow();
+  const val = sheet.getRange(lastMatchRow, SL_COL.FINAL_STOCK).getValue();
+  return Number(val);
+}
+
+/**
+ * Resolves an entry's item lookup for batch-submit. Tries a direct code
+ * match first, then falls back to decoding it as a weight-embedded
+ * barcode (same logic as getItemByBarcode).
+ */
+function _resolveEntryForSubmit_(code) {
+  const direct = _findItemRecordByCode_(code);
+  if (direct) return direct;
+
+  const decoded = _parseWeightBarcode_(code);
+  if (decoded) {
+    const viaCode = _findItemRecordByCode_(decoded.itemCode);
+    if (viaCode) return viaCode;
+  }
+  return null;
+}
+
+function recordStockCountBatch(data) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+
+    if (!data) throw new Error('No data received.');
+    const branchId = BRANCHES[data.branchId] ? data.branchId : DEFAULT_BRANCH;
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+
+    if (entries.length === 0) {
+      throw new Error('No entries to submit.');
+    }
+
+    // More than a few entries -> one bulk read of Item_Master is faster
+    // than a separate search per entry.
+    if (entries.length > 3) _loadItemMap_();
+
+    const rowsToWrite = [];
+    const failed = [];
+    let nextTxnNum = _getNextTxnNumber_(branchId);
+
+    entries.forEach(function (entry, idx) {
+      const code = _normalizeCode_(entry.barcodeCode);
+      const countedQty = Number(entry.countedQty);
+      const operatorName = String(entry.operatorName || '').trim() || '-';
+      const remarks = String(entry.remarks || '').trim();
+
+      if (!code) { failed.push({ index: idx, barcodeCode: code, reason: 'Missing barcode.' }); return; }
+      if (isNaN(countedQty) || countedQty < 0) { failed.push({ index: idx, barcodeCode: code, reason: 'Invalid counted quantity.' }); return; }
+
+      const master = _resolveEntryForSubmit_(code) || { printName: 'Scanned Item (' + code + ')', dept: '-', saleRate: 0, perGramRate: 0 };
+      const txnId = branchId + '-' + nextTxnNum;
+      nextTxnNum++;
+
+      const decodedForRate = _parseWeightBarcode_(code);
+      let rate = Number(master.saleRate) || 0;
+      if (decodedForRate) {
+        const perGramRate = Number(master.perGramRate) || 0;
+        rate = perGramRate > 0 ? perGramRate * 1000 : rate;
+      }
+      const amount = Math.round(countedQty * rate * 100) / 100;
+
+      rowsToWrite.push([
+        txnId,
+        new Date(),
+        code,
+        master.printName,
+        master.dept,
+        TXN_TYPE_STOCK_COUNT,
+        countedQty,
+        countedQty,
+        operatorName,
+        remarks,
+        amount
+      ]);
     });
-}
 
-function wireBluetoothScanner() {
-  const btInput = document.getElementById('btScannerInput');
-  let barcodeBuffer = '';
-  let lastKeyTime = Date.now();
-
-  window.addEventListener('keydown', function (e) {
-    if (e.target.tagName === 'INPUT' && e.target !== btInput) return;
-
-    const currentTime = Date.now();
-    if (currentTime - lastKeyTime > 100) {
-      barcodeBuffer = '';
+    if (rowsToWrite.length > 0) {
+      const logsSheet = _sheet_(_branchLogSheetName_(branchId));
+      const startRow = logsSheet.getLastRow() + 1;
+      logsSheet.getRange(startRow, 1, rowsToWrite.length, SL_NUM_COLS).setValues(rowsToWrite);
     }
-    lastKeyTime = currentTime;
 
-    if (e.key === 'Enter') {
-      if (barcodeBuffer.length > 0) {
-        processScan(barcodeBuffer);
-        barcodeBuffer = '';
-      }
-    } else if (e.key.length === 1) {
-      barcodeBuffer += e.key;
-    }
-  });
-}
-
-function setBanner(text, cls) {
-  const el = document.getElementById('scanBanner');
-  el.textContent = text;
-  el.className = 'scan-banner' + (cls ? ' ' + cls : '');
-}
-
-function formatQty(entry) {
-  return entry.isWeightItem ? entry.countedQty.toFixed(3) : String(entry.countedQty);
-}
-
-function renderList() {
-  const body = document.getElementById('scanTableBody');
-  const badge = document.getElementById('countBadge');
-  const submitBtn = document.getElementById('finalSubmitBtn');
-
-  badge.textContent = scannedItems.length + ' item' + (scannedItems.length === 1 ? '' : 's');
-  submitBtn.disabled = scannedItems.length === 0;
-
-  if (scannedItems.length === 0) {
-    body.innerHTML = '<tr><td colspan="4" class="empty-list">Point the camera at a barcode to start scanning...</td></tr>';
-    return;
-  }
-
-  const reversed = scannedItems.slice().reverse();
-  const originalIndexOf = function (entry) { return scannedItems.indexOf(entry); };
-
-  body.innerHTML = reversed.map(function (entry) {
-    const idx = originalIndexOf(entry);
-    const step = entry.isWeightItem ? WEIGHT_QTY_STEP_KG : 1;
-    return (
-      '<tr id="row-item-' + idx + '">' +
-        '<td>' + escapeHtml(entry.itemName) +
-          (entry.isWeightItem ? '<span class="weight-tag">WEIGHED</span>' : '') +
-        '</td>' +
-        '<td class="text-muted">' + escapeHtml(entry.alternateUnit || '-') + '</td>' +
-        '<td>' +
-          '<span class="qty-adjust">' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + (-step) + ')"><i class="fa-solid fa-minus"></i></button>' +
-            '<span class="fw-semibold mx-2" id="qty-val-' + idx + '" style="user-select:none;">' + escapeHtml(formatQty(entry)) + '</span>' +
-            '<button type="button" class="qty-btn" tabindex="-1" onpointerdown="fastAdjustQty(event, ' + idx + ', ' + step + ')"><i class="fa-solid fa-plus"></i></button>' +
-          '</span>' +
-        '</td>' +
-        '<td><button type="button" tabindex="-1" class="remove-btn" onpointerdown="fastRemoveItem(event, ' + idx + ')" title="Remove"><i class="fa-solid fa-trash"></i></button></td>' +
-      '</tr>'
-    );
-  }).join('');
-}
-
-function fastAdjustQty(e, index, delta) {
-  if (e) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  adjustQty(index, delta);
-}
-
-function fastRemoveItem(e, index) {
-  if (e) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  removeItem(index);
-}
-
-function adjustQty(index, delta) {
-  const entry = scannedItems[index];
-  if (!entry) return;
-  let next = entry.countedQty + delta;
-  if (entry.isWeightItem) {
-    next = Math.round(next * 1000) / 1000; // avoid floating-point drift on kg steps
-  }
-  entry.countedQty = Math.max(0, next);
-  updateQtyDisplay(index);
-}
-
-function updateQtyDisplay(index) {
-  const el = document.getElementById('qty-val-' + index);
-  if (el && scannedItems[index]) {
-    el.textContent = formatQty(scannedItems[index]);
-  } else {
-    renderList();
-  }
-}
-
-function removeItem(index) {
-  scannedItems.splice(index, 1);
-  renderList();
-}
-
-function finalSubmit() {
-  if (scannedItems.length === 0) return;
-
-  const btn = document.getElementById('finalSubmitBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-
-  const entries = scannedItems.map(function (e) {
     return {
-      barcodeCode: e.barcodeCode,
-      countedQty: e.countedQty,
-      operatorName: '',
-      remarks: ''
+      success: rowsToWrite.length > 0,
+      message: rowsToWrite.length + ' of ' + entries.length + ' entries saved.',
+      savedCount: rowsToWrite.length,
+      txnIds: rowsToWrite.map(function (r) { return r[0]; }),
+      failed: failed
     };
+
+  } catch (err) {
+    return { success: false, message: err.message, savedCount: 0, txnIds: [], failed: [] };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function _getNextTxnNumber_(branchId) {
+  const sheet = _sheet_(_branchLogSheetName_(branchId));
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return TXN_ID_START;
+
+  const ids = sheet.getRange(2, SL_COL.TXN_ID, lastRow - 1, 1).getValues();
+  let maxNum = TXN_ID_START - 1;
+
+  for (let i = 0; i < ids.length; i++) {
+    const raw = String(ids[i][0] || '');
+    const match = raw.match(/(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNum) maxNum = num;
+    }
+  }
+
+  return maxNum + 1;
+}
+
+function getRecentStockLogs(branchId) {
+  try {
+    const bId = BRANCHES[branchId] ? branchId : DEFAULT_BRANCH;
+    const sheet = _sheet_(_branchLogSheetName_(bId));
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    const numRows = Math.min(10, lastRow - 1);
+    const startRow = lastRow - numRows + 1;
+    const data = sheet.getRange(startRow, 1, numRows, SL_NUM_COLS).getValues();
+
+    const logs = data.map(function (row) {
+      return {
+        txnId: row[SL_COL.TXN_ID - 1],
+        dateTime: Utilities.formatDate(
+          new Date(row[SL_COL.DATE_TIME - 1]),
+          Session.getScriptTimeZone() || 'Asia/Kolkata',
+          'dd-MMM-yyyy HH:mm:ss'
+        ),
+        barcodeCode: row[SL_COL.BARCODE_CODE - 1],
+        itemName: row[SL_COL.ITEM_NAME - 1],
+        dept: row[SL_COL.DEPT - 1],
+        txnType: row[SL_COL.TXN_TYPE - 1],
+        entryQty: row[SL_COL.ENTRY_QTY - 1],
+        finalStock: row[SL_COL.FINAL_STOCK - 1],
+        operatorName: row[SL_COL.OPERATOR_NAME - 1],
+        remarks: row[SL_COL.REMARKS - 1],
+        amount: row[SL_COL.AMOUNT - 1] || 0
+      };
+    });
+
+    return logs.reverse();
+  } catch (err) {
+    return [];
+  }
+}
+
+function getItemPickList() {
+  try {
+    const sheet = _sheet_(SHEET_ITEM_MASTER);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+
+    const cols = _resolveItemMasterColumns_(sheet);
+    const codeCol = sheet.getRange(2, cols.userDefinedCode, lastRow - 1, 1).getValues();
+    const printCol = sheet.getRange(2, cols.printName, lastRow - 1, 1).getValues();
+    const productCol = sheet.getRange(2, cols.productName, lastRow - 1, 1).getValues();
+
+    const list = [];
+    for (let i = 0; i < codeCol.length; i++) {
+      const code = _normalizeCode_(codeCol[i][0]);
+      if (!code) continue;
+      const printName = String(printCol[i][0] || '').trim();
+      const productName = String(productCol[i][0] || '').trim();
+      list.push({ printName: printName || productName || 'Unnamed Item', code: code });
+    }
+    return list;
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * Run manually from the Apps Script editor to test the weight-barcode
+ * decoder against a sample code without needing to scan anything.
+ */
+function debugTestWeightBarcode() {
+  const sampleCode = '805700750';
+  const decoded = _parseWeightBarcode_(sampleCode);
+  Logger.log('Input: ' + sampleCode);
+  Logger.log('Decoded: ' + JSON.stringify(decoded));
+  if (decoded) {
+    Logger.log('Would look up item code "' + decoded.itemCode + '" in Item_Master.');
+    Logger.log('Weight: ' + decoded.weightGrams + ' g = ' + decoded.weightKg + ' kg');
+  }
+}
+
+// ============================================================================
+// ADMIN DASHBOARD FUNCTIONS
+// ============================================================================
+
+function getAvailableMonths() {
+  const monthsSet = {};
+
+  Object.keys(BRANCHES).forEach(function (branchKey) {
+    try {
+      const sheet = _sheet_(BRANCHES[branchKey].logSheet);
+      const lastRow = sheet.getLastRow();
+      if (lastRow < 2) return;
+
+      const dates = sheet.getRange(2, SL_COL.DATE_TIME, lastRow - 1, 1).getValues();
+      dates.forEach(function (row) {
+        const d = row[0];
+        if (!(d instanceof Date) || isNaN(d.getTime())) return;
+        const key = d.getFullYear() + '-' + (d.getMonth() + 1);
+        monthsSet[key] = { year: d.getFullYear(), month: d.getMonth() + 1 };
+      });
+    } catch (e) {
+      // that branch's sheet might not exist yet — skip it
+    }
   });
 
-  apiPost({ action: 'recordStockCountBatch', data: { branchId: BRANCH_ID, entries: entries } })
-    .then(function (result) {
-      btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Submit';
-      if (result.success) {
-        playSound('beepSuccess');
-        setBanner('✅ Saved ' + result.savedCount + ' items to ' + BRANCH_LABEL, 'ok');
-        scannedItems = [];
-        renderList();
-      } else {
-        playSound('beepError');
-        setBanner(result.message || 'Submit failed.', 'err');
-        btn.disabled = false;
+  const list = Object.keys(monthsSet).map(function (key) { return monthsSet[key]; });
+  list.sort(function (a, b) {
+    if (a.year !== b.year) return b.year - a.year;
+    return b.month - a.month;
+  });
+
+  return list.map(function (m) {
+    const label = Utilities.formatDate(new Date(m.year, m.month - 1, 1), Session.getScriptTimeZone() || 'Asia/Kolkata', 'MMM yyyy');
+    return { year: m.year, month: m.month, label: label };
+  });
+}
+
+/**
+ * Resolves the grouping key + CURRENT rate for a logged barcode, always
+ * from Item_Master's current values.
+ */
+function _resolveCurrentPricing_(loggedBarcode, fallbackName) {
+  const decoded = _parseWeightBarcode_(loggedBarcode);
+
+  if (decoded) {
+    const item = _findItemRecordByCode_(decoded.itemCode);
+    const perGramRate = item ? (Number(item.perGramRate) || 0) : 0;
+    const saleRate = item ? (Number(item.saleRate) || 0) : 0;
+    const rate = perGramRate > 0 ? perGramRate * 1000 : saleRate;
+    return {
+      key: decoded.itemCode,
+      name: item ? (item.printName || item.productName) : fallbackName,
+      dept: item ? item.dept : null,
+      unit: 'Kg',
+      rate: rate
+    };
+  }
+
+  const item = _findItemRecordByCode_(loggedBarcode);
+  return {
+    key: loggedBarcode,
+    name: item ? (item.printName || item.productName) : fallbackName,
+    dept: item ? item.dept : null,
+    unit: item ? (item.stockUnit || 'Pcs') : 'Pcs',
+    rate: item ? (Number(item.saleRate) || 0) : 0
+  };
+}
+
+/**
+ * Builds the month-wise, ITEM-wise stock + valuation summary for the
+ * admin dashboard.
+ */
+function getAdminSummary(monthParam, yearParam, branchFilter) {
+  const month = parseInt(monthParam, 10);
+  const year = parseInt(yearParam, 10);
+
+  if (!month || !year) {
+    return { error: 'Missing or invalid month/year.' };
+  }
+
+  // One bulk read of Item_Master for every row in the report.
+  _loadItemMap_();
+
+  const branchKeysToScan = (branchFilter && BRANCHES[branchFilter])
+    ? [branchFilter]
+    : Object.keys(BRANCHES);
+
+  const itemTotals = {};
+  const deptGrandTotals = {};
+  let grandTotalAmount = 0;
+  let grandTotalQty = 0;
+  let grandEntryCount = 0;
+
+  branchKeysToScan.forEach(function (branchKey) {
+    try {
+      const sheet = _sheet_(BRANCHES[branchKey].logSheet);
+      const lastRow = sheet.getLastRow();
+      if (lastRow < 2) return;
+
+      const data = sheet.getRange(2, 1, lastRow - 1, SL_NUM_COLS).getValues();
+
+      data.forEach(function (row) {
+        const d = row[SL_COL.DATE_TIME - 1];
+        if (!(d instanceof Date) || isNaN(d.getTime())) return;
+        if (d.getFullYear() !== year || (d.getMonth() + 1) !== month) return;
+
+        const loggedBarcode = _normalizeCode_(row[SL_COL.BARCODE_CODE - 1]);
+        const loggedItemName = String(row[SL_COL.ITEM_NAME - 1] || 'Unknown Item').trim();
+        const loggedDept = String(row[SL_COL.DEPT - 1] || 'Unassigned').trim() || 'Unassigned';
+        const qty = Number(row[SL_COL.ENTRY_QTY - 1]) || 0;
+
+        const pricing = _resolveCurrentPricing_(loggedBarcode, loggedItemName);
+        const dept = pricing.dept || loggedDept;
+        const rowAmount = Math.round(qty * pricing.rate * 100) / 100;
+
+        if (!itemTotals[pricing.key]) {
+          itemTotals[pricing.key] = {
+            name: pricing.name || loggedItemName,
+            dept: dept,
+            unit: pricing.unit,
+            qty: 0,
+            rate: pricing.rate,
+            total: 0
+          };
+        }
+        itemTotals[pricing.key].qty += qty;
+        itemTotals[pricing.key].rate = pricing.rate;
+        itemTotals[pricing.key].total += rowAmount;
+
+        if (!deptGrandTotals[dept]) deptGrandTotals[dept] = { qty: 0, amount: 0 };
+        deptGrandTotals[dept].qty += qty;
+        deptGrandTotals[dept].amount += rowAmount;
+
+        grandTotalAmount += rowAmount;
+        grandTotalQty += qty;
+        grandEntryCount += 1;
+      });
+    } catch (e) {
+      // branch sheet missing — treat as zero data for that branch
+    }
+  });
+
+  const items = Object.keys(itemTotals).map(function (key) {
+    const it = itemTotals[key];
+    return {
+      key: key,
+      name: it.name,
+      dept: it.dept,
+      unit: it.unit,
+      qty: Math.round(it.qty * 1000) / 1000,
+      rate: Math.round(it.rate * 100) / 100,
+      total: Math.round(it.total * 100) / 100
+    };
+  }).sort(function (a, b) { return b.total - a.total; });
+
+  Object.keys(deptGrandTotals).forEach(function (dept) {
+    deptGrandTotals[dept].amount = Math.round(deptGrandTotals[dept].amount * 100) / 100;
+    deptGrandTotals[dept].qty = Math.round(deptGrandTotals[dept].qty * 1000) / 1000;
+  });
+
+  return {
+    month: month,
+    year: year,
+    items: items,
+    deptGrandTotals: deptGrandTotals,
+    grandTotalAmount: Math.round(grandTotalAmount * 100) / 100,
+    grandTotalQty: Math.round(grandTotalQty * 1000) / 1000,
+    grandEntryCount: grandEntryCount
+  };
+}
+
+/**
+ * Admin dashboard "Add Entry" — records ONE manual stock entry directly.
+ */
+function addManualEntry(data) {
+  if (!data) return { success: false, message: 'No data received.' };
+  return recordStockCountBatch({
+    branchId: data.branchId,
+    entries: [{
+      barcodeCode: data.barcodeCode,
+      countedQty: data.countedQty,
+      operatorName: data.operatorName || 'Admin',
+      remarks: data.remarks || 'Manual entry (Admin Dashboard)'
+    }]
+  });
+}
+
+/**
+ * ONE-TIME DATA FIX — rewrites the Dept column on existing log rows to
+ * match the item's CURRENT department in Item_Master.
+ */
+function reassignDepartments() {
+  // One bulk read of Item_Master for every log row.
+  _loadItemMap_();
+
+  const results = {};
+  let grandUpdated = 0;
+  let grandUnchanged = 0;
+  let grandNotFound = 0;
+
+  Object.keys(BRANCHES).forEach(function (branchKey) {
+    let updated = 0;
+    let unchanged = 0;
+    let notFound = 0;
+
+    try {
+      const sheet = _sheet_(BRANCHES[branchKey].logSheet);
+      const lastRow = sheet.getLastRow();
+
+      if (lastRow >= 2) {
+        const numRows = lastRow - 1;
+        const barcodeCol = sheet.getRange(2, SL_COL.BARCODE_CODE, numRows, 1).getValues();
+        const deptCol = sheet.getRange(2, SL_COL.DEPT, numRows, 1).getValues();
+        const newDeptCol = [];
+
+        for (let i = 0; i < numRows; i++) {
+          const loggedBarcode = _normalizeCode_(barcodeCol[i][0]);
+          const currentDeptStored = String(deptCol[i][0] || '').trim();
+
+          if (!loggedBarcode) {
+            newDeptCol.push([deptCol[i][0]]);
+            continue;
+          }
+
+          const pricing = _resolveCurrentPricing_(loggedBarcode, null);
+          const correctDept = pricing.dept ? String(pricing.dept).trim() : '';
+
+          if (!correctDept) {
+            notFound++;
+            newDeptCol.push([deptCol[i][0]]);
+          } else if (correctDept === currentDeptStored) {
+            unchanged++;
+            newDeptCol.push([deptCol[i][0]]);
+          } else {
+            updated++;
+            newDeptCol.push([correctDept]);
+          }
+        }
+
+        sheet.getRange(2, SL_COL.DEPT, numRows, 1).setValues(newDeptCol);
       }
-    })
-    .catch(function (err) {
-      btn.innerHTML = '<i class="fa-solid fa-check-double"></i> Submit';
-      playSound('beepError');
-      setBanner('Error: ' + err.message, 'err');
-      btn.disabled = false;
-    });
-}
+    } catch (e) {
+      // branch sheet missing — skip it
+    }
 
-function apiGet(params) {
-  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
-    return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
-  }
-  const query = new URLSearchParams(params).toString();
-  return fetch(APPS_SCRIPT_URL + '?' + query, { method: 'GET' })
-    .then(function (res) { return res.text(); })
-    .then(function (text) {
-      try { return JSON.parse(text); }
-      catch (e) { throw new Error('Invalid API response — check deployment access is "Anyone".'); }
-    });
-}
+    results[branchKey] = { label: BRANCHES[branchKey].label, updated: updated, unchanged: unchanged, notFound: notFound };
+    grandUpdated += updated;
+    grandUnchanged += unchanged;
+    grandNotFound += notFound;
+  });
 
-function apiPost(bodyObj) {
-  if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('PASTE_YOUR') !== -1) {
-    return Promise.reject(new Error('APPS_SCRIPT_URL is not set.'));
-  }
-  return fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(bodyObj)
-  })
-    .then(function (res) { return res.text(); })
-    .then(function (text) {
-      try { return JSON.parse(text); }
-      catch (e) { throw new Error('Invalid API response — check deployment access is "Anyone".'); }
-    });
+  return {
+    success: true,
+    message: 'Reassigned departments: ' + grandUpdated + ' updated, ' + grandUnchanged + ' already correct, ' + grandNotFound + ' item(s) not found in Item_Master.',
+    branches: results,
+    totalUpdated: grandUpdated,
+    totalUnchanged: grandUnchanged,
+    totalNotFound: grandNotFound
+  };
 }
-
-function playSound(id) {
-  const audio = document.getElementById(id);
-  if (audio) {
-    audio.currentTime = 0;
-    audio.play().catch(function () {});
-  }
-}
-
-function escapeHtml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-</script>
-</body>
-</html>
